@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
@@ -38,9 +38,6 @@ import {
   Timer,
   Repeat,
   Plus,
-  Home,
-  ListChecks,
-  CircleUser,
 } from 'lucide-react';
 
 // ===== TYPES =====
@@ -648,9 +645,14 @@ const WaitlistCard = ({ entry, onLeave }: WaitlistCardProps) => {
 };
 
 // Main Component
-export function ConsumerApp() {
-  const [activeView, setActiveView] = useState<'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile'>('discover');
+export function ConsumerApp({ 
+  activeView: externalActiveView}: { 
+  activeView?: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile';
+  onViewChange?: (view: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile') => void;
+} = {}) {
+  const [activeView, setActiveView] = useState<'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile'>(externalActiveView || 'discover');
   const [searchQuery, setSearchQuery] = useState('');
+  const [committedSearchQuery, setCommittedSearchQuery] = useState(''); // Search query committed by button click
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [selectedTime, setSelectedTime] = useState<string>(roundToNearest15(new Date()));
   const [partySize, setPartySize] = useState('2');
@@ -661,18 +663,27 @@ export function ConsumerApp() {
   const [reservationExperience, setReservationExperience] = useState<string | null>(null);
   const [modifyingReservation, setModifyingReservation] = useState<Reservation | null>(null);
 
-  // Filter restaurants based on search
+  // Update activeView when external prop changes
+  useEffect(() => {
+    if (externalActiveView) {
+      setActiveView(externalActiveView);
+    }
+  }, [externalActiveView]);
+
+  // Handle view change
+
+  // Filter restaurants based on committed search (only when button is clicked)
   const filteredRestaurants = mockRestaurants.filter(restaurant =>
-    restaurant.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    restaurant.cuisine.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    restaurant.description.toLowerCase().includes(searchQuery.toLowerCase())
+    restaurant.name.toLowerCase().includes(committedSearchQuery.toLowerCase()) ||
+    restaurant.cuisine.toLowerCase().includes(committedSearchQuery.toLowerCase()) ||
+    restaurant.description.toLowerCase().includes(committedSearchQuery.toLowerCase())
   );
 
-  // Filter experiences based on search
+  // Filter experiences based on committed search (only when button is clicked)
   const filteredExperiences = mockExperiences.filter(exp =>
-    exp.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    exp.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    exp.restaurantName.toLowerCase().includes(searchQuery.toLowerCase())
+    exp.name.toLowerCase().includes(committedSearchQuery.toLowerCase()) ||
+    exp.description.toLowerCase().includes(committedSearchQuery.toLowerCase()) ||
+    exp.restaurantName.toLowerCase().includes(committedSearchQuery.toLowerCase())
   );
 
   const handleBookRestaurant = (restaurant: Restaurant) => {
@@ -736,74 +747,6 @@ export function ConsumerApp() {
 
   return (
     <div className="min-h-screen bg-slate-900">
-      {/* Top Navigation */}
-      <div className="bg-slate-950 sticky top-0 z-50 border-b border-slate-800/50">
-        <div className="container mx-auto px-6 py-3 max-w-7xl">
-          {/* Pill Navigation */}
-          <div className="flex items-center gap-4">
-            <button
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
-                activeView === 'discover'
-                  ? 'bg-slate-800/80 text-white shadow-inner'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              onClick={() => setActiveView('discover')}
-            >
-              <Home className="w-4 h-4" />
-              <span className="text-sm">Dashboard</span>
-            </button>
-
-            <button
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
-                activeView === 'experiences'
-                  ? 'bg-slate-800/80 text-white shadow-inner'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              onClick={() => setActiveView('experiences')}
-            >
-              <Sparkles className="w-4 h-4" />
-              <span className="text-sm">Experiences</span>
-            </button>
-
-            <button
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
-                activeView === 'reservations'
-                  ? 'bg-slate-800/80 text-white shadow-inner'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              onClick={() => setActiveView('reservations')}
-            >
-              <ListChecks className="w-4 h-4" />
-              <span className="text-sm">Reservations</span>
-            </button>
-
-            <button
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
-                activeView === 'waitlist'
-                  ? 'bg-slate-800/80 text-white shadow-inner'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              onClick={() => setActiveView('waitlist')}
-            >
-              <Timer className="w-4 h-4" />
-              <span className="text-sm">Waitlist</span>
-            </button>
-
-            <button
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
-                activeView === 'profile'
-                  ? 'bg-slate-800/80 text-white shadow-inner'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              onClick={() => setActiveView('profile')}
-            >
-              <CircleUser className="w-4 h-4" />
-              <span className="text-sm">Profile</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
       <div className="container mx-auto px-6 py-6 max-w-7xl">
         {/* DISCOVER VIEW */}
         {activeView === 'discover' && (
@@ -845,83 +788,118 @@ export function ConsumerApp() {
 
             {/* Search Bar with Date, Time, and Party Size - NOW BELOW AI RECOMMENDATIONS */}
             <Card className="p-6 bg-slate-800/50 border-slate-700">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                {/* Search */}
-                <div className="md:col-span-1">
-                  <Label className="text-slate-300 mb-2 block">Search</Label>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
-                    <Input
-                      placeholder="Restaurant or cuisine"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-10 bg-slate-700 border-slate-600 text-slate-100"
-                    />
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  {/* Search */}
+                  <div className="md:col-span-1">
+                    <Label className="text-slate-300 mb-2 block">Search</Label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
+                      <Input
+                        placeholder="Restaurant or cuisine"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="pl-10 bg-slate-700 border-slate-600 text-slate-100"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Date */}
+                  <div>
+                    <Label className="text-slate-300 mb-2 block">Date</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className="w-full justify-start bg-slate-700 border-slate-600 text-slate-100"
+                        >
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0 bg-slate-800 border-slate-700">
+                        <Calendar
+                          mode="single"
+                          selected={selectedDate}
+                          onSelect={(date) => date && setSelectedDate(date)}
+                          className="rounded-md"
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+
+                  {/* Time */}
+                  <div>
+                    <Label className="text-slate-300 mb-2 block">Time</Label>
+                    <Select value={selectedTime} onValueChange={setSelectedTime}>
+                      <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                        <Clock className="mr-2 h-4 w-4" />
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {generateTimeSlots().map(slot => (
+                          <SelectItem key={slot} value={slot}>{slot}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Party Size */}
+                  <div>
+                    <Label className="text-slate-300 mb-2 block">Guests</Label>
+                    <Select value={partySize} onValueChange={setPartySize}>
+                      <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                        <Users className="mr-2 h-4 w-4" />
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(num => (
+                          <SelectItem key={num} value={num.toString()}>
+                            {num} {num === 1 ? 'Guest' : 'Guests'}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
 
-                {/* Date */}
-                <div>
-                  <Label className="text-slate-300 mb-2 block">Date</Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className="w-full justify-start bg-slate-700 border-slate-600 text-slate-100"
-                      >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0 bg-slate-800 border-slate-700">
-                      <Calendar
-                        mode="single"
-                        selected={selectedDate}
-                        onSelect={(date) => date && setSelectedDate(date)}
-                        className="rounded-md"
-                      />
-                    </PopoverContent>
-                  </Popover>
-                </div>
-
-                {/* Time */}
-                <div>
-                  <Label className="text-slate-300 mb-2 block">Time</Label>
-                  <Select value={selectedTime} onValueChange={setSelectedTime}>
-                    <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
-                      <Clock className="mr-2 h-4 w-4" />
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="bg-slate-800 border-slate-700">
-                      {generateTimeSlots().map(slot => (
-                        <SelectItem key={slot} value={slot}>{slot}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Party Size */}
-                <div>
-                  <Label className="text-slate-300 mb-2 block">Guests</Label>
-                  <Select value={partySize} onValueChange={setPartySize}>
-                    <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
-                      <Users className="mr-2 h-4 w-4" />
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="bg-slate-800 border-slate-700">
-                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(num => (
-                        <SelectItem key={num} value={num.toString()}>
-                          {num} {num === 1 ? 'Guest' : 'Guests'}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                {/* Search/Filter Button */}
+                <div className="flex justify-center pt-4">
+                  <Button 
+                    size="lg"
+                    className="group relative bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:from-blue-700 hover:via-blue-600 hover:to-cyan-600 text-white shadow-xl hover:shadow-2xl hover:shadow-blue-500/50 px-16 py-6 rounded-xl transition-all duration-300 hover:scale-105 border border-blue-400/20"
+                    onClick={() => {
+                      // Commit the search query to trigger filtering
+                      setCommittedSearchQuery(searchQuery);
+                      
+                      // Scroll to restaurant listings
+                      const restaurantSection = document.querySelector('[data-section="restaurants"]');
+                      if (restaurantSection) {
+                        restaurantSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }
+                      // Show toast with search criteria
+                      const searchSummary = [
+                        searchQuery && `"${searchQuery}"`,
+                        selectedDate && selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                        selectedTime,
+                        `${partySize} ${partySize === '1' ? 'guest' : 'guests'}`
+                      ].filter(Boolean).join(' • ');
+                      
+                      toast.success('Searching for tables...', {
+                        description: searchSummary,
+                        duration: 2000
+                      });
+                    }}
+                  >
+                    <Search className="w-5 h-5 mr-2 group-hover:rotate-90 transition-transform duration-300" />
+                    <span className="tracking-wide">Find Tables</span>
+                  </Button>
                 </div>
               </div>
             </Card>
 
             {/* Restaurant Listings */}
-            <div>
+            <div data-section="restaurants">
               <h2 className="text-2xl text-slate-100 mb-4">Available Restaurants</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {filteredRestaurants.map(restaurant => (

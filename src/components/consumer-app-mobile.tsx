@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
@@ -130,14 +130,36 @@ const mockReservations: Reservation[] = [
   },
 ];
 
-export function ConsumerAppMobile() {
-  const [activeTab, setActiveTab] = useState('home');
+export function ConsumerAppMobile({ 
+  activeTab: externalActiveTab,
+  onTabChange
+}: { 
+  activeTab?: 'home' | 'reservations' | 'saved' | 'profile';
+  onTabChange?: (tab: 'home' | 'reservations' | 'saved' | 'profile') => void;
+} = {}) {
+  const [activeTab, setActiveTab] = useState<'home' | 'reservations' | 'saved' | 'profile'>(externalActiveTab || 'home');
   const [searchQuery, setSearchQuery] = useState('');
+  const [committedSearchQuery, setCommittedSearchQuery] = useState(''); // Search query committed by button click
   const [partySize, setPartySize] = useState(2);
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
   const [selectedTime, setSelectedTime] = useState('');
   const [reservations, setReservations] = useState<Reservation[]>(mockReservations);
   const [savedRestaurants, setSavedRestaurants] = useState<string[]>([]);
+
+  // Update activeTab when external prop changes
+  useEffect(() => {
+    if (externalActiveTab) {
+      setActiveTab(externalActiveTab);
+    }
+  }, [externalActiveTab]);
+
+  // Handle tab change
+  const handleTabChange = (tab: 'home' | 'reservations' | 'saved' | 'profile') => {
+    setActiveTab(tab);
+    if (onTabChange) {
+      onTabChange(tab);
+    }
+  };
 
   const handleBooking = () => {
     if (!selectedRestaurant || !selectedTime) {
@@ -159,7 +181,7 @@ export function ConsumerAppMobile() {
     toast.success(`Reservation confirmed!`);
     setSelectedRestaurant(null);
     setSelectedTime('');
-    setActiveTab('reservations');
+    handleTabChange('reservations');
   };
 
   const toggleSave = (restaurantId: string) => {
@@ -172,21 +194,15 @@ export function ConsumerAppMobile() {
     }
   };
 
+  // Filter restaurants based on committed search (only when button is clicked)
   const filteredRestaurants = mockRestaurants.filter(
     (r) =>
-      r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      r.cuisine.toLowerCase().includes(searchQuery.toLowerCase())
+      r.name.toLowerCase().includes(committedSearchQuery.toLowerCase()) ||
+      r.cuisine.toLowerCase().includes(committedSearchQuery.toLowerCase())
   );
 
   return (
     <div className="min-h-screen bg-slate-900 pb-20">
-      {/* Mobile Header */}
-      <div className="sticky top-0 z-40 bg-slate-800/95 backdrop-blur-sm border-b border-slate-700 px-4 py-4">
-        <h1 className="text-2xl text-slate-100">
-          Reserve<span className="text-blue-400">AI</span>
-        </h1>
-      </div>
-
       {/* Content */}
       <div className="px-4 py-6">
         {activeTab === 'home' && (
@@ -232,11 +248,39 @@ export function ConsumerAppMobile() {
                     <Calendar className="w-5 h-5" />
                   </Button>
                 </div>
+
+                {/* Search Button */}
+                <Button 
+                  className="group w-full h-14 bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:from-blue-700 hover:via-blue-600 hover:to-cyan-600 text-white shadow-xl hover:shadow-2xl hover:shadow-blue-500/50 rounded-xl transition-all duration-300 active:scale-95 border border-blue-400/20"
+                  onClick={() => {
+                    // Commit the search query to trigger filtering
+                    setCommittedSearchQuery(searchQuery);
+                    
+                    // Scroll to restaurant listings
+                    const restaurantSection = document.querySelector('[data-section="restaurants-mobile"]');
+                    if (restaurantSection) {
+                      restaurantSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                    // Show toast with search criteria
+                    const searchSummary = [
+                      searchQuery && `"${searchQuery}"`,
+                      `${partySize} ${partySize === 1 ? 'guest' : 'guests'}`
+                    ].filter(Boolean).join(' • ');
+                    
+                    toast.success('Searching for tables...', {
+                      description: searchSummary || 'Finding nearby restaurants',
+                      duration: 2000
+                    });
+                  }}
+                >
+                  <Search className="w-5 h-5 mr-2 group-hover:rotate-90 transition-transform duration-300" />
+                  <span className="tracking-wide">Find Tables</span>
+                </Button>
               </div>
             </div>
 
             {/* Featured Restaurants */}
-            <div>
+            <div data-section="restaurants-mobile">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg text-slate-100">Nearby Restaurants</h3>
                 <Button variant="ghost" size="sm" className="text-blue-400">
@@ -492,7 +536,7 @@ export function ConsumerAppMobile() {
             className={`flex-col h-14 ${
               activeTab === 'home' ? 'text-blue-400' : 'text-slate-400'
             }`}
-            onClick={() => setActiveTab('home')}
+            onClick={() => handleTabChange('home')}
           >
             <Home className="w-6 h-6 mb-1" />
             <span className="text-xs">Home</span>
@@ -502,7 +546,7 @@ export function ConsumerAppMobile() {
             className={`flex-col h-14 ${
               activeTab === 'reservations' ? 'text-blue-400' : 'text-slate-400'
             }`}
-            onClick={() => setActiveTab('reservations')}
+            onClick={() => handleTabChange('reservations')}
           >
             <History className="w-6 h-6 mb-1" />
             <span className="text-xs">Reservations</span>
@@ -512,7 +556,7 @@ export function ConsumerAppMobile() {
             className={`flex-col h-14 ${
               activeTab === 'saved' ? 'text-blue-400' : 'text-slate-400'
             }`}
-            onClick={() => setActiveTab('saved')}
+            onClick={() => handleTabChange('saved')}
           >
             <Bookmark className="w-6 h-6 mb-1" />
             <span className="text-xs">Saved</span>
@@ -522,7 +566,7 @@ export function ConsumerAppMobile() {
             className={`flex-col h-14 ${
               activeTab === 'profile' ? 'text-blue-400' : 'text-slate-400'
             }`}
-            onClick={() => setActiveTab('profile')}
+            onClick={() => handleTabChange('profile')}
           >
             <User className="w-6 h-6 mb-1" />
             <span className="text-xs">Profile</span>

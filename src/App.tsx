@@ -5,6 +5,7 @@ import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Label } from './components/ui/label';
 import { Toaster } from './components/ui/sonner';
+import { toast } from 'sonner';
 import { ConsumerApp } from './components/consumer-app-complete';
 import { ConsumerAppMobile } from './components/consumer-app-mobile';
 import { 
@@ -15,28 +16,37 @@ import {
   Mail,
   LogOut,
   Crown,
-  User
+  User,
+  LayoutGrid,
+  UtensilsCrossed,
+  BookOpen,
+  Clock,
+  UserCircle,
+  Loader2
 } from 'lucide-react';
+import { onAuthStateChange, signInWithEmail, signUpWithEmail, signInWithGoogle, signOutUser } from './lib/firebase-auth';
+import type { UserProfile } from './lib/firebase-auth';
+import type { User as FirebaseUser } from 'firebase/auth';
 
-interface UserAccount {
-  email: string;
-  password: string;
-  name: string;
-}
-
-// Demo account for testing
-const demoAccount: UserAccount = {
+// Demo account for testing (fallback when Firebase is not configured)
+const demoAccount = {
   email: 'diner@demo.com',
   password: 'demo123',
   name: 'John Doe'
 };
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
+  const [activePage, setActivePage] = useState('dashboard');
 
   // Detect mobile device
   useEffect(() => {
@@ -51,73 +61,450 @@ export default function App() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  const handleLogin = (e: React.FormEvent) => {
+  // Listen for authentication state changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChange(async (user) => {
+      setCurrentUser(user);
+      setAuthLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setLoading(true);
 
-    if (email === demoAccount.email && password === demoAccount.password) {
-      setCurrentUser(demoAccount);
-      setEmail('');
-      setPassword('');
-    } else {
-      setError('Invalid email or password');
+    try {
+      if (isSignUp) {
+        if (!displayName.trim()) {
+          setError('Please enter your name');
+          setLoading(false);
+          return;
+        }
+        const { user, profile } = await signUpWithEmail(email, password, displayName);
+        setCurrentUser(user);
+        setUserProfile(profile);
+        toast.success('Account created successfully!');
+        setEmail('');
+        setPassword('');
+        setDisplayName('');
+      } else {
+        const { user, profile } = await signInWithEmail(email, password);
+        setCurrentUser(user);
+        setUserProfile(profile);
+        toast.success('Welcome back!');
+        setEmail('');
+        setPassword('');
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Authentication failed';
+      setError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null);
+  const handleGoogleSignIn = async () => {
+    setError('');
+    setLoading(true);
+
+    try {
+      const { user, profile } = await signInWithGoogle();
+      setCurrentUser(user);
+      setUserProfile(profile);
+      toast.success('Signed in with Google!');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Google sign in failed';
+      setError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOutUser();
+      setCurrentUser(null);
+      setUserProfile(null);
+      toast.success('Logged out successfully');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to logout';
+      toast.error(errorMessage);
+    }
   };
 
   const quickLogin = () => {
-    setCurrentUser(demoAccount);
+    // Fallback demo login when Firebase is not configured
+    setCurrentUser({
+      uid: 'demo-user',
+      email: demoAccount.email,
+      displayName: demoAccount.name,
+    } as FirebaseUser);
+    toast.success('Demo mode activated');
   };
+
+  // Show loading spinner while checking auth state
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 text-blue-500 animate-spin mx-auto mb-4" />
+          <p className="text-slate-400">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   // If user is logged in, show the Diner Portal
   if (currentUser) {
-    // Choose mobile or desktop version
-    const ConsumerComponent = isMobile ? ConsumerAppMobile : ConsumerApp;
+    // Map activePage to ConsumerApp view (desktop)
+    const mapPageToView = (page: string): 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile' => {
+      if (page === 'dashboard') return 'discover';
+      return page as 'experiences' | 'reservations' | 'waitlist' | 'profile';
+    };
 
+    const mapViewToPage = (view: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile'): string => {
+      if (view === 'discover') return 'dashboard';
+      return view;
+    };
+
+    // Map activePage to ConsumerAppMobile tab (mobile)
+    const mapPageToTab = (page: string): 'home' | 'reservations' | 'saved' | 'profile' => {
+      if (page === 'dashboard') return 'home';
+      if (page === 'experiences') return 'saved'; // Experiences maps to saved on mobile
+      if (page === 'waitlist') return 'reservations'; // Waitlist maps to reservations on mobile
+      return page as 'reservations' | 'profile';
+    };
+
+    const mapTabToPage = (tab: 'home' | 'reservations' | 'saved' | 'profile'): string => {
+      if (tab === 'home') return 'dashboard';
+      if (tab === 'saved') return 'experiences';
+      return tab;
+    };
+
+    const handleViewChange = (view: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile') => {
+      setActivePage(mapViewToPage(view));
+    };
+
+    const handleTabChange = (tab: 'home' | 'reservations' | 'saved' | 'profile') => {
+      setActivePage(mapTabToPage(tab));
+    };
+
+    // Mobile view - render ConsumerAppMobile without header
+    if (isMobile) {
+      return (
+        <>
+          <Toaster richColors position="top-right" />
+          <ConsumerAppMobile 
+            activeTab={mapPageToTab(activePage)} 
+            onTabChange={handleTabChange}
+          />
+        </>
+      );
+    }
+
+    // Desktop view - render with header and ConsumerApp
     return (
       <>
         <Toaster richColors position="top-right" />
         <div className="min-h-screen bg-slate-900">
-          {/* App Header */}
-          <div className="border-b bg-slate-800/50 backdrop-blur-sm sticky top-0 z-50 border-slate-700">
-            <div className="container mx-auto px-3 sm:px-4 md:px-6 py-2 sm:py-3 md:py-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 sm:gap-3 md:gap-4">
-                  <motion.div
-                    whileHover={{ scale: 1.05 }}
-                    className="w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-lg flex items-center justify-center shadow-lg"
-                  >
-                    <ChefHat className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
-                  </motion.div>
-                  <div>
-                    <h1 className="text-base sm:text-lg md:text-xl text-slate-100">ReserveAI</h1>
-                    <p className="text-xs sm:text-sm text-slate-400">Diner Portal</p>
-                  </div>
+          {/* Top Navigation Bar - Slim Semi-Rounded Style */}
+          <header className="sticky top-0 z-50" style={{ backgroundColor: '#061322' }}>
+            {/* Menu Bar - Top Section */}
+            <div className="h-16 flex items-center justify-between px-20 py-3 border-b border-slate-800">
+              {/* Left Side - App Icon/Logo */}
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-lg flex items-center justify-center shadow-lg">
+                  <Crown className="w-5 h-5 text-white" />
                 </div>
-                
-                <div className="flex items-center gap-2 sm:gap-3 md:gap-4">
-                  <div className="hidden sm:flex items-center gap-2 sm:gap-3 px-2 sm:px-3 md:px-4 py-1.5 sm:py-2 bg-slate-700/50 rounded-lg">
-                    <User className="w-3 h-3 sm:w-4 sm:h-4 text-slate-400" />
-                    <span className="text-xs sm:text-sm text-slate-200">{currentUser.name}</span>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleLogout}
-                    className="border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white h-8 sm:h-9 px-2 sm:px-3"
-                  >
-                    <LogOut className="w-3 h-3 sm:w-4 sm:h-4 sm:mr-2" />
-                    <span className="hidden sm:inline">Logout</span>
-                  </Button>
+                <div>
+                  <h1 className="text-lg text-slate-100">ReserveAI</h1>
+                  <p className="text-xs text-slate-400">Diner Portal</p>
                 </div>
               </div>
+
+              {/* Right Side - User Info & Logout Button */}
+              <div className="flex items-center gap-4">
+                {/* User Info - Now with logout button style */}
+                <div 
+                  className="rounded-lg flex items-center gap-2 transition-all duration-200"
+                  style={{
+                    backgroundColor: '#1E2B3C',
+                    boxShadow: '0 2px 4px rgba(0, 0, 0, 0.25)',
+                    fontFamily: 'Inter, system-ui, sans-serif',
+                    fontWeight: 500,
+                    fontSize: '14px',
+                    color: '#A9B6C5',
+                    height: '36px',
+                    paddingLeft: '16px',
+                    paddingRight: '16px',
+                    borderRadius: '12px',
+                  }}
+                >
+                  <User className="w-4 h-4" style={{ color: '#A9B6C5' }} />
+                  <span>{userProfile?.displayName || currentUser.displayName || currentUser.email || 'User'}</span>
+                </div>
+
+                {/* Logout Button - Now with username container style */}
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleLogout}
+                  className="flex items-center gap-2 px-4 py-2 bg-slate-800/50 rounded-lg border border-slate-700 transition-all duration-200 hover:bg-slate-700/70 hover:border-slate-600"
+                >
+                  <LogOut className="w-4 h-4 text-slate-400" />
+                  <span className="text-sm text-slate-300">Logout</span>
+                </motion.button>
+              </div>
             </div>
-          </div>
+
+            {/* Navbar - Bottom Section */}
+            <div className="h-16 flex items-center justify-center px-12 py-3">
+              {/* Navbar Container - 90% Width Semi-Rounded Bar */}
+              <div 
+                className="flex items-center justify-center rounded-xl w-full"
+                style={{
+                  backgroundColor: '#1E2B3C',
+                  height: '36px',
+                  boxShadow: '0 2px 4px rgba(0, 0, 0, 0.25)',
+                  borderRadius: '12px',
+                }}
+              >
+                {/* Navigation Items - Centered & Evenly Spaced */}
+                <nav className="flex items-center w-full h-full px-4" style={{ justifyContent: 'space-evenly' }}>
+                  {/* Dashboard */}
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    className="rounded-lg flex items-center justify-center transition-all duration-200"
+                    style={{
+                      backgroundColor: activePage === 'dashboard' ? '#2B3D56' : 'transparent',
+                      boxShadow: activePage === 'dashboard' ? '0 2px 6px rgba(0, 0, 0, 0.25)' : 'none',
+                      fontFamily: 'Inter, system-ui, sans-serif',
+                      fontWeight: 500,
+                      fontSize: '14px',
+                      color: activePage === 'dashboard' ? '#FFFFFF' : '#A9B6C5',
+                      flex: '1',
+                      height: '28px',
+                      paddingLeft: '12px',
+                      paddingRight: '12px',
+                      paddingTop: '6px',
+                      paddingBottom: '6px',
+                      gap: '6px',
+                      borderRadius: '8px',
+                    }}
+                    onClick={() => setActivePage('dashboard')}
+                    onMouseEnter={(e) => {
+                      if (activePage !== 'dashboard') {
+                        e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#C7D4E1';
+                        if (text) (text as HTMLElement).style.color = '#C7D4E1';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activePage !== 'dashboard') {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#A9B6C5';
+                        if (text) (text as HTMLElement).style.color = '#A9B6C5';
+                      }
+                    }}
+                  >
+                    <LayoutGrid className="w-4 h-4" style={{ color: activePage === 'dashboard' ? '#FFFFFF' : '#A9B6C5' }} />
+                    <span style={{ color: activePage === 'dashboard' ? '#FFFFFF' : '#A9B6C5' }}>Dashboard</span>
+                  </motion.button>
+
+                  {/* Experiences */}
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    className="rounded-lg flex items-center justify-center transition-all duration-200"
+                    style={{
+                      backgroundColor: activePage === 'experiences' ? '#2B3D56' : 'transparent',
+                      boxShadow: activePage === 'experiences' ? '0 2px 6px rgba(0, 0, 0, 0.25)' : 'none',
+                      fontFamily: 'Inter, system-ui, sans-serif',
+                      fontWeight: 500,
+                      fontSize: '14px',
+                      color: activePage === 'experiences' ? '#FFFFFF' : '#A9B6C5',
+                      flex: '1',
+                      height: '28px',
+                      paddingLeft: '12px',
+                      paddingRight: '12px',
+                      paddingTop: '6px',
+                      paddingBottom: '6px',
+                      gap: '6px',
+                      borderRadius: '8px',
+                    }}
+                    onClick={() => setActivePage('experiences')}
+                    onMouseEnter={(e) => {
+                      if (activePage !== 'experiences') {
+                        e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#C7D4E1';
+                        if (text) (text as HTMLElement).style.color = '#C7D4E1';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activePage !== 'experiences') {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#A9B6C5';
+                        if (text) (text as HTMLElement).style.color = '#A9B6C5';
+                      }
+                    }}
+                  >
+                    <UtensilsCrossed className="w-4 h-4" style={{ color: activePage === 'experiences' ? '#FFFFFF' : '#A9B6C5' }} />
+                    <span style={{ color: activePage === 'experiences' ? '#FFFFFF' : '#A9B6C5' }}>Experiences</span>
+                  </motion.button>
+
+                  {/* Reservations */}
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    className="rounded-lg flex items-center justify-center transition-all duration-200"
+                    style={{
+                      backgroundColor: activePage === 'reservations' ? '#2B3D56' : 'transparent',
+                      boxShadow: activePage === 'reservations' ? '0 2px 6px rgba(0, 0, 0, 0.25)' : 'none',
+                      fontFamily: 'Inter, system-ui, sans-serif',
+                      fontWeight: 500,
+                      fontSize: '14px',
+                      color: activePage === 'reservations' ? '#FFFFFF' : '#A9B6C5',
+                      flex: '1',
+                      height: '28px',
+                      paddingLeft: '12px',
+                      paddingRight: '12px',
+                      paddingTop: '6px',
+                      paddingBottom: '6px',
+                      gap: '6px',
+                      borderRadius: '8px',
+                    }}
+                    onClick={() => setActivePage('reservations')}
+                    onMouseEnter={(e) => {
+                      if (activePage !== 'reservations') {
+                        e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#C7D4E1';
+                        if (text) (text as HTMLElement).style.color = '#C7D4E1';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activePage !== 'reservations') {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#A9B6C5';
+                        if (text) (text as HTMLElement).style.color = '#A9B6C5';
+                      }
+                    }}
+                  >
+                    <BookOpen className="w-4 h-4" style={{ color: activePage === 'reservations' ? '#FFFFFF' : '#A9B6C5' }} />
+                    <span style={{ color: activePage === 'reservations' ? '#FFFFFF' : '#A9B6C5' }}>Reservations</span>
+                  </motion.button>
+
+                  {/* Waitlist */}
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    className="rounded-lg flex items-center justify-center transition-all duration-200"
+                    style={{
+                      backgroundColor: activePage === 'waitlist' ? '#2B3D56' : 'transparent',
+                      boxShadow: activePage === 'waitlist' ? '0 2px 6px rgba(0, 0, 0, 0.25)' : 'none',
+                      fontFamily: 'Inter, system-ui, sans-serif',
+                      fontWeight: 500,
+                      fontSize: '14px',
+                      color: activePage === 'waitlist' ? '#FFFFFF' : '#A9B6C5',
+                      flex: '1',
+                      height: '28px',
+                      paddingLeft: '12px',
+                      paddingRight: '12px',
+                      paddingTop: '6px',
+                      paddingBottom: '6px',
+                      gap: '6px',
+                      borderRadius: '8px',
+                    }}
+                    onClick={() => setActivePage('waitlist')}
+                    onMouseEnter={(e) => {
+                      if (activePage !== 'waitlist') {
+                        e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#C7D4E1';
+                        if (text) (text as HTMLElement).style.color = '#C7D4E1';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activePage !== 'waitlist') {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#A9B6C5';
+                        if (text) (text as HTMLElement).style.color = '#A9B6C5';
+                      }
+                    }}
+                  >
+                    <Clock className="w-4 h-4" style={{ color: activePage === 'waitlist' ? '#FFFFFF' : '#A9B6C5' }} />
+                    <span style={{ color: activePage === 'waitlist' ? '#FFFFFF' : '#A9B6C5' }}>Waitlist</span>
+                  </motion.button>
+
+                  {/* Profile */}
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    className="rounded-lg flex items-center justify-center transition-all duration-200"
+                    style={{
+                      backgroundColor: activePage === 'profile' ? '#2B3D56' : 'transparent',
+                      boxShadow: activePage === 'profile' ? '0 2px 6px rgba(0, 0, 0, 0.25)' : 'none',
+                      fontFamily: 'Inter, system-ui, sans-serif',
+                      fontWeight: 500,
+                      fontSize: '14px',
+                      color: activePage === 'profile' ? '#FFFFFF' : '#A9B6C5',
+                      flex: '1',
+                      height: '28px',
+                      paddingLeft: '12px',
+                      paddingRight: '12px',
+                      paddingTop: '6px',
+                      paddingBottom: '6px',
+                      gap: '6px',
+                      borderRadius: '8px',
+                    }}
+                    onClick={() => setActivePage('profile')}
+                    onMouseEnter={(e) => {
+                      if (activePage !== 'profile') {
+                        e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#C7D4E1';
+                        if (text) (text as HTMLElement).style.color = '#C7D4E1';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activePage !== 'profile') {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#A9B6C5';
+                        if (text) (text as HTMLElement).style.color = '#A9B6C5';
+                      }
+                    }}
+                  >
+                    <UserCircle className="w-4 h-4" style={{ color: activePage === 'profile' ? '#FFFFFF' : '#A9B6C5' }} />
+                    <span style={{ color: activePage === 'profile' ? '#FFFFFF' : '#A9B6C5' }}>Profile</span>
+                  </motion.button>
+                </nav>
+              </div>
+            </div>
+          </header>
           
-          <ConsumerComponent />
+          {/* Page Content - Use ConsumerApp Component */}
+          <ConsumerApp 
+            activeView={mapPageToView(activePage)} 
+            onViewChange={handleViewChange}
+          />
         </div>
       </>
     );
@@ -186,11 +573,35 @@ export default function App() {
           >
             <Card className="p-8 bg-slate-800 border-slate-700 shadow-2xl">
               <div className="mb-6">
-                <h3 className="text-2xl text-slate-100 mb-2">Sign In</h3>
-                <p className="text-slate-400">Enter your credentials to access your portal</p>
+                <h3 className="text-2xl text-slate-100 mb-2">
+                  {isSignUp ? 'Create Account' : 'Sign In'}
+                </h3>
+                <p className="text-slate-400">
+                  {isSignUp 
+                    ? 'Create your account to get started' 
+                    : 'Enter your credentials to access your portal'}
+                </p>
               </div>
 
               <form onSubmit={handleLogin} className="space-y-5">
+                {isSignUp && (
+                  <div className="space-y-2">
+                    <Label htmlFor="displayName" className="text-slate-200">Full Name</Label>
+                    <div className="relative">
+                      <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
+                      <Input
+                        id="displayName"
+                        type="text"
+                        placeholder="John Doe"
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        className="pl-10 bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500 focus:border-blue-500"
+                        required={isSignUp}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-2">
                   <Label htmlFor="email" className="text-slate-200">Email Address</Label>
                   <div className="relative">
@@ -238,10 +649,64 @@ export default function App() {
 
                 <Button
                   type="submit"
-                  className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white shadow-lg"
+                  disabled={loading}
+                  className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Sign In
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      {isSignUp ? 'Creating Account...' : 'Signing In...'}
+                    </>
+                  ) : (
+                    isSignUp ? 'Create Account' : 'Sign In'
+                  )}
                 </Button>
+
+                {/* Google Sign In Button */}
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-slate-700" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-slate-800 px-2 text-slate-500">Or continue with</span>
+                  </div>
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={loading}
+                  onClick={handleGoogleSignIn}
+                  className="w-full border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white hover:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loading ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                    </svg>
+                  )}
+                  Sign in with Google
+                </Button>
+
+                {/* Toggle Sign Up / Sign In */}
+                <div className="text-center pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSignUp(!isSignUp);
+                      setError('');
+                    }}
+                    className="text-sm text-slate-400 hover:text-blue-400 transition-colors"
+                  >
+                    {isSignUp 
+                      ? 'Already have an account? Sign in' 
+                      : "Don't have an account? Sign up"}
+                  </button>
+                </div>
               </form>
 
               <div className="mt-8 pt-6 border-t border-slate-700">
@@ -250,7 +715,8 @@ export default function App() {
                   variant="outline"
                   size="sm"
                   onClick={quickLogin}
-                  className="w-full border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white hover:border-blue-500"
+                  disabled={loading}
+                  className="w-full border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white hover:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <ChefHat className="w-4 h-4 mr-2" />
                   Login as Diner
