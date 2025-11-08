@@ -25,21 +25,16 @@ import {
   Loader2
 } from 'lucide-react';
 import { onAuthStateChange, signInWithEmail, signUpWithEmail, signInWithGoogle, signOutUser } from './lib/firebase-auth';
-import type { UserProfile } from './lib/firebase-auth';
+import type { UserProfile } from './lib/types';
 import type { User as FirebaseUser } from 'firebase/auth';
-
-// Demo account for testing (fallback when Firebase is not configured)
-const demoAccount = {
-  email: 'diner@demo.com',
-  password: 'demo123',
-  name: 'John Doe'
-};
+import { getDemoData } from './lib/demo-data';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
@@ -47,6 +42,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [activePage, setActivePage] = useState('dashboard');
+  const [isDemoMode, setIsDemoMode] = useState(false);
 
   // Detect mobile device
   useEffect(() => {
@@ -83,12 +79,18 @@ export default function App() {
           setLoading(false);
           return;
         }
-        const { user, profile } = await signUpWithEmail(email, password, displayName);
+        if (!username.trim() || username.length < 3) {
+          setError('Please enter a valid username (at least 3 characters)');
+          setLoading(false);
+          return;
+        }
+        const { user, profile } = await signUpWithEmail(email, password, username, displayName);
         setCurrentUser(user);
         setUserProfile(profile);
         toast.success('Account created successfully!');
         setEmail('');
         setPassword('');
+        setUsername('');
         setDisplayName('');
       } else {
         const { user, profile } = await signInWithEmail(email, password);
@@ -127,9 +129,13 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
-      await signOutUser();
+      // Only call Firebase signout if not in demo mode
+      if (!isDemoMode) {
+        await signOutUser();
+      }
       setCurrentUser(null);
       setUserProfile(null);
+      setIsDemoMode(false);
       toast.success('Logged out successfully');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to logout';
@@ -138,13 +144,18 @@ export default function App() {
   };
 
   const quickLogin = () => {
-    // Fallback demo login when Firebase is not configured
+    // Demo login - loads demo data for testing
+    const demoData = getDemoData();
+    
     setCurrentUser({
-      uid: 'demo-user',
-      email: demoAccount.email,
-      displayName: demoAccount.name,
+      uid: demoData.profile.uid,
+      email: demoData.profile.email,
+      displayName: demoData.profile.displayName,
     } as FirebaseUser);
-    toast.success('Demo mode activated');
+    
+    setUserProfile(demoData.profile);
+    setIsDemoMode(true);
+    toast.success('Demo mode activated - using demo data');
   };
 
   // Show loading spinner while checking auth state
@@ -585,21 +596,42 @@ export default function App() {
 
               <form onSubmit={handleLogin} className="space-y-5">
                 {isSignUp && (
-                  <div className="space-y-2">
-                    <Label htmlFor="displayName" className="text-slate-200">Full Name</Label>
-                    <div className="relative">
-                      <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
-                      <Input
-                        id="displayName"
-                        type="text"
-                        placeholder="John Doe"
-                        value={displayName}
-                        onChange={(e) => setDisplayName(e.target.value)}
-                        className="pl-10 bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500 focus:border-blue-500"
-                        required={isSignUp}
-                      />
+                  <>
+                    <div className="space-y-2">
+                      <Label htmlFor="displayName" className="text-slate-200">Full Name</Label>
+                      <div className="relative">
+                        <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
+                        <Input
+                          id="displayName"
+                          type="text"
+                          placeholder="John Doe"
+                          value={displayName}
+                          onChange={(e) => setDisplayName(e.target.value)}
+                          className="pl-10 bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500 focus:border-blue-500"
+                          required={isSignUp}
+                        />
+                      </div>
                     </div>
-                  </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="username" className="text-slate-200">Username</Label>
+                      <div className="relative">
+                        <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
+                        <Input
+                          id="username"
+                          type="text"
+                          placeholder="johndoe"
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+                          className="pl-10 bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500 focus:border-blue-500"
+                          required={isSignUp}
+                          minLength={3}
+                          maxLength={20}
+                        />
+                      </div>
+                      <p className="text-xs text-slate-500">3-20 characters, lowercase letters, numbers, and underscores only</p>
+                    </div>
+                  </>
                 )}
 
                 <div className="space-y-2">

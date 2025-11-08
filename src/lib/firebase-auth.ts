@@ -6,24 +6,12 @@ import {
   updateProfile,
   sendPasswordResetEmail,
   GoogleAuthProvider,
-  signInWithPopup
+  signInWithPopup,
 } from 'firebase/auth';
-import type {User, UserCredential } from 'firebase/auth';
+import type { User, UserCredential } from 'firebase/auth';  
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth, db } from './firebase';
-
-export interface UserProfile {
-  uid: string;
-  email: string;
-  displayName: string;
-  createdAt: string;
-  role: 'diner' | 'restaurant' | 'admin';
-  preferences?: {
-    cuisine?: string[];
-    dietaryRestrictions?: string[];
-    priceRange?: number;
-  };
-}
+import type { UserProfile } from './types';
 
 /**
  * Get error message from Firebase error
@@ -39,14 +27,34 @@ function getErrorMessage(error: unknown): string {
 }
 
 /**
+ * Check if username is available
+ */
+export async function isUsernameAvailable(username: string): Promise<boolean> {
+  try {
+    const usernameDoc = await getDoc(doc(db, 'usernames', username.toLowerCase()));
+    return !usernameDoc.exists();
+  } catch (error) {
+    console.error('Error checking username:', error);
+    return false;
+  }
+}
+
+/**
  * Sign up a new user with email and password
  */
 export async function signUpWithEmail(
   email: string, 
-  password: string, 
+  password: string,
+  username: string,
   displayName: string
 ): Promise<{ user: User; profile: UserProfile }> {
   try {
+    // Check if username is available
+    const available = await isUsernameAvailable(username);
+    if (!available) {
+      throw new Error('Username is already taken. Please choose another one.');
+    }
+
     // Create user account
     const userCredential: UserCredential = await createUserWithEmailAndPassword(auth, email, password);
     const user: User = userCredential.user;
@@ -58,13 +66,32 @@ export async function signUpWithEmail(
     const userProfile: UserProfile = {
       uid: user.uid,
       email: user.email || email,
+      username: username.toLowerCase(),
       displayName,
       createdAt: new Date().toISOString(),
       role: 'diner', // Default role
-      preferences: {}
+      preferences: {
+        cuisine: [],
+        dietaryRestrictions: [],
+        priceRange: 2,
+        favoriteRestaurants: []
+      },
+      stats: {
+        totalReservations: 0,
+        upcomingReservations: 0,
+        cancelledReservations: 0,
+        noShowCount: 0
+      }
     };
 
+    // Save user profile
     await setDoc(doc(db, 'users', user.uid), userProfile);
+    
+    // Reserve username
+    await setDoc(doc(db, 'usernames', username.toLowerCase()), {
+      uid: user.uid,
+      createdAt: new Date().toISOString()
+    });
 
     return { user, profile: userProfile };
   } catch (error) {
@@ -110,15 +137,45 @@ export async function signInWithGoogle(): Promise<{ user: User; profile: UserPro
 
     // If profile doesn't exist, create one
     if (!profile) {
+      // Generate username from email or display name
+      const baseUsername = (user.email?.split('@')[0] || user.displayName?.replace(/\s+/g, '') || 'user').toLowerCase();
+      let username = baseUsername;
+      let counter = 1;
+      
+      // Find available username
+      while (!(await isUsernameAvailable(username))) {
+        username = `${baseUsername}${counter}`;
+        counter++;
+      }
+
       profile = {
         uid: user.uid,
         email: user.email || '',
+        username,
         displayName: user.displayName || 'User',
         createdAt: new Date().toISOString(),
         role: 'diner',
-        preferences: {}
+        preferences: {
+          cuisine: [],
+          dietaryRestrictions: [],
+          priceRange: 2,
+          favoriteRestaurants: []
+        },
+        stats: {
+          totalReservations: 0,
+          upcomingReservations: 0,
+          cancelledReservations: 0,
+          noShowCount: 0
+        }
       };
+      
       await setDoc(doc(db, 'users', user.uid), profile);
+      
+      // Reserve username
+      await setDoc(doc(db, 'usernames', username), {
+        uid: user.uid,
+        createdAt: new Date().toISOString()
+      });
     }
 
     return { user, profile };
