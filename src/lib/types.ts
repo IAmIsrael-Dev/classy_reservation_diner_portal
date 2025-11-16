@@ -1,17 +1,28 @@
-// Type definitions for environment variables
-interface ImportMetaEnv {
-  readonly VITE_FIREBASE_API_KEY: string;
-  readonly VITE_FIREBASE_AUTH_DOMAIN: string;
-  readonly VITE_FIREBASE_DATABASE_URL: string;
-  readonly VITE_FIREBASE_PROJECT_ID: string;
-  readonly VITE_FIREBASE_STORAGE_BUCKET: string;
-  readonly VITE_FIREBASE_MESSAGING_SENDER_ID: string;
-  readonly VITE_FIREBASE_APP_ID: string;
+// Payment Method Interface
+export interface PaymentMethod {
+  id: string;
+  type: string;
+  last4: string;
+  expiry: string;
+  isDefault: boolean;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-interface ImportMeta {
-  readonly env: ImportMetaEnv;
+// Notification Settings Interface
+export interface NotificationSettings {
+  email: boolean;
+  sms: boolean;
+  push: boolean;
+  reservationReminders: boolean;
+  waitlistUpdates: boolean;
+  promotions: boolean;
+}
+
+// Dining Preferences Interface
+export interface DiningPreferences {
+  favoriteCuisines: string[];
+  dietaryRestrictions: string[];
+  spiceLevel: string;
+  seatingPreference: string;
 }
 
 // User Profile Interface
@@ -37,6 +48,10 @@ export interface UserProfile {
     cancelledReservations?: number;
     noShowCount?: number;
   };
+  // New settings fields
+  notificationSettings?: NotificationSettings;
+  diningPreferences?: DiningPreferences;
+  paymentMethods?: PaymentMethod[];
 }
 
 // Reservation Interface

@@ -25,7 +25,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { onAuthStateChange, signInWithEmail, signUpWithEmail, signInWithGoogle, signOutUser } from './lib/firebase-auth';
-import type { UserProfile } from './lib/types';
+import { type UserProfile } from './lib/types';
 import type { User as FirebaseUser } from 'firebase/auth';
 import { getDemoData } from './lib/demo-data';
 
@@ -213,6 +213,9 @@ export default function App() {
           <ConsumerAppMobile 
             activeTab={mapPageToTab(activePage)} 
             onTabChange={handleTabChange}
+            isDemoMode={isDemoMode}
+            currentUser={currentUser}
+            userProfile={userProfile}
           />
         </>
       );
@@ -515,6 +518,9 @@ export default function App() {
           <ConsumerApp 
             activeView={mapPageToView(activePage)} 
             onViewChange={handleViewChange}
+            isDemoMode={isDemoMode}
+            currentUser={currentUser}
+            userProfile={userProfile}
           />
         </div>
       </>

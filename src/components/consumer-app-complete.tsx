@@ -14,6 +14,25 @@ import { Progress } from './ui/progress';
 import { Switch } from './ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { toast } from 'sonner';
+import { getDemoData, demoUserProfile } from '../lib/demo-data';
+import { signOutUser } from '../lib/firebase-auth';
+import { 
+  fetchRestaurants, 
+  fetchUserReservations, 
+  fetchAllExperiences,
+  fetchUserWaitlist,
+  fetchUserProfile,
+  updateUserProfile,
+  updateNotificationSettings,
+  updateDiningPreferences,
+  updatePaymentMethods,
+  fetchFavoriteRestaurants,
+  addFavoriteRestaurant,
+  removeFavoriteRestaurant,
+  createReservation
+} from '../lib/firebase-data';
+import type { User as FirebaseUser } from 'firebase/auth';
+import type { UserProfile } from '../lib/types';
 import {
   Search,
   MapPin,
@@ -26,6 +45,7 @@ import {
   Utensils,
   Wine,
   Award,
+  History,
   Settings,
   Check,
   User,
@@ -36,12 +56,20 @@ import {
   Sparkles,
   Gift,
   Timer,
-  Repeat,
   Plus,
+  Repeat,
+  Save,
+  X,
+  Trash2,
+  Lock,
+  Mail,
+  Smartphone,
+  Shield,
 } from 'lucide-react';
 
 // ===== TYPES =====
-interface Restaurant {
+// Local mock restaurant interface for demo UI (different from Firebase Restaurant type)
+interface MockRestaurant {
   id: string;
   name: string;
   cuisine: string;
@@ -57,7 +85,7 @@ interface Restaurant {
   availableSlots: string[];
   aiScore?: number;
   aiReason?: string;
-  experiences?: Experience[];
+  experiences?: MockExperience[];
   ambiance?: {
     noiseLevel: 'Quiet' | 'Moderate' | 'Lively';
     lighting: 'Dim' | 'Ambient' | 'Bright';
@@ -68,36 +96,21 @@ interface Restaurant {
   currentWaitTime?: number;
 }
 
-interface Experience {
+interface MockExperience {
   id: string;
   name: string;
   description: string;
   price: number;
-  icon: string;
-  includes: string[];
+  icon?: string;
+  includes?: string[];
   restaurantId: string;
   restaurantName: string;
-  restaurantImage: string;
-  date: string;
-  availableSlots: string[];
+  restaurantImage?: string;
+  date?: string;
+  availableSlots?: string[];
 }
 
-interface Reservation {
-  id: string;
-  restaurantName: string;
-  restaurantId: string;
-  restaurantImage: string;
-  restaurantAddress: string;
-  date: string;
-  time: string;
-  partySize: number;
-  status: 'upcoming' | 'completed' | 'cancelled';
-  confirmationCode: string;
-  experience?: string;
-  pointsEarned?: number;
-}
-
-interface WaitlistEntry {
+interface MockWaitlistEntry {
   id: string;
   restaurantName: string;
   restaurantImage: string;
@@ -108,13 +121,74 @@ interface WaitlistEntry {
   notifyReady: boolean;
 }
 
+interface MockReservation {
+  id: string;
+  userId: string;
+  restaurantName: string;
+  restaurantId: string;
+  restaurantImage: string;
+  restaurantAddress?: string;
+  date: string;
+  time: string;
+  partySize: number;
+  status: 'confirmed' | 'pending' | 'cancelled' | 'completed' | 'no-show';
+  confirmationCode?: string;
+  experience?: string;
+  pointsEarned?: number;
+  specialRequests?: string;
+  createdAt?: string;
+}
+
 interface AIRecommendation {
   type: 'restaurant' | 'rebook' | 'experience' | 'time';
   title: string;
   description: string;
-  restaurant?: Restaurant;
+  restaurant?: MockRestaurant;
   action: string;
   confidence: number;
+}
+
+// Type for hours object from Firebase
+type HoursObject = {
+  [key: string]: { open: string; close: string } | 'closed';
+};
+
+// Type for hours - can be string or object
+type Hours = string | HoursObject | undefined;
+
+// Type for Firebase Restaurant with partial fields
+interface FirebaseRestaurantData {
+  id: string;
+  name: string;
+  description?: string;
+  cuisine?: string | string[];
+  priceRange?: number;
+  rating?: number;
+  reviewCount?: number;
+  address?: string;
+  city?: string;
+  state?: string;
+  zipCode?: string;
+  phone?: string;
+  email?: string;
+  website?: string;
+  images?: string[];
+  imageUrl?: string;
+  image?: string;
+  hours?: Hours;
+  amenities?: string[];
+  features?: string[];
+  dietaryOptions?: string[];
+  dietary?: string[];
+  distance?: string;
+  availableSlots?: string[];
+  ambiance?: {
+    noiseLevel?: 'Quiet' | 'Moderate' | 'Lively';
+    lighting?: 'Dim' | 'Ambient' | 'Bright';
+    vibe?: string[];
+  };
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // ===== UTILITY FUNCTIONS =====
@@ -145,8 +219,79 @@ const generateTimeSlots = (): string[] => {
   return slots;
 };
 
+// Helper to convert hours object to string
+const formatHoursToString = (hours: Hours): string => {
+  // If already a string, return it
+  if (typeof hours === 'string') {
+    return hours;
+  }
+  
+  // If it's an object, format it
+  if (hours && typeof hours === 'object') {
+    const today = new Date().toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+    const todayHours = hours[today];
+    
+    if (todayHours) {
+      if (todayHours === 'closed') {
+        return 'Closed today';
+      }
+      
+      if (typeof todayHours === 'object' && todayHours.open && todayHours.close) {
+        // Format time from 24h to 12h format
+        const formatTime = (time: string) => {
+          const [hourStr, minuteStr] = time.split(':');
+          const hour = parseInt(hourStr);
+          const minute = minuteStr || '00';
+          const period = hour >= 12 ? 'PM' : 'AM';
+          const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+          return `${displayHour}:${minute} ${period}`;
+        };
+        
+        return `${formatTime(todayHours.open)} - ${formatTime(todayHours.close)}`;
+      }
+    }
+  }
+  
+  return 'Hours vary';
+};
+
+// Transform Firebase Restaurant to MockRestaurant with display fields
+const transformToMockRestaurant = (firebaseRestaurant: FirebaseRestaurantData): MockRestaurant => {
+  // Format hours from Firebase format to display string
+  const hoursString = formatHoursToString(firebaseRestaurant.hours);
+
+  return {
+    id: firebaseRestaurant.id,
+    name: firebaseRestaurant.name,
+    cuisine: Array.isArray(firebaseRestaurant.cuisine) 
+      ? firebaseRestaurant.cuisine.join(', ') 
+      : (firebaseRestaurant.cuisine || 'Various'),
+    rating: firebaseRestaurant.rating || 4.5,
+    reviews: firebaseRestaurant.reviewCount || 0,
+    priceLevel: firebaseRestaurant.priceRange || 2,
+    distance: '1.2 mi', // Default distance - could be calculated from user location
+    image: Array.isArray(firebaseRestaurant.images) && firebaseRestaurant.images.length > 0
+      ? firebaseRestaurant.images[0]
+      : 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
+    description: firebaseRestaurant.description || '',
+    address: firebaseRestaurant.address || '',
+    hours: hoursString,
+    features: firebaseRestaurant.amenities || [],
+    availableSlots: ['5:00 PM', '5:30 PM', '6:00 PM', '6:30 PM', '7:00 PM', '7:30 PM', '8:00 PM', '8:30 PM', '9:00 PM'],
+    dietary: firebaseRestaurant.dietaryOptions || [],
+    ambiance: {
+      noiseLevel: 'Moderate' as const,
+      lighting: 'Ambient' as const,
+      vibe: ['Casual', 'Modern']
+    },
+    experiences: [],
+    waitlistAvailable: false,
+    currentWaitTime: 0
+  };
+};
+
 // ===== MOCK DATA =====
-const mockExperiences: Experience[] = [
+const mockExperiences: MockExperience[] = [
   {
     id: 'exp1',
     name: 'Wine Pairing Experience',
@@ -214,7 +359,7 @@ const mockExperiences: Experience[] = [
   },
 ];
 
-const mockRestaurants: Restaurant[] = [
+const mockRestaurants: MockRestaurant[] = [
   {
     id: '1',
     name: 'Bella Vista',
@@ -345,94 +490,6 @@ const mockRestaurants: Restaurant[] = [
   },
 ];
 
-const mockReservations: Reservation[] = [
-  {
-    id: 'res-1',
-    restaurantName: 'Bella Vista',
-    restaurantId: '1',
-    restaurantImage: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
-    restaurantAddress: '123 Main Street, Downtown',
-    date: '2025-10-28',
-    time: '7:00 PM',
-    partySize: 2,
-    status: 'upcoming',
-    confirmationCode: 'BV2341',
-    experience: 'Wine Pairing Experience',
-  },
-  {
-    id: 'res-2',
-    restaurantName: 'Sakura House',
-    restaurantId: '2',
-    restaurantImage: 'https://images.unsplash.com/photo-1579027989536-b7b1f875659b?w=800&h=600&fit=crop',
-    restaurantAddress: '456 Oak Avenue, Midtown',
-    date: '2025-10-30',
-    time: '8:00 PM',
-    partySize: 4,
-    status: 'upcoming',
-    confirmationCode: 'SH7892',
-  },
-  {
-    id: 'res-3',
-    restaurantName: 'The Steakhouse',
-    restaurantId: '3',
-    restaurantImage: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&h=600&fit=crop',
-    restaurantAddress: '789 Elm Street, Financial District',
-    date: '2025-10-10',
-    time: '7:30 PM',
-    partySize: 6,
-    status: 'completed',
-    confirmationCode: 'TS5612',
-    pointsEarned: 720,
-  },
-  {
-    id: 'res-4',
-    restaurantName: 'Le Jardin',
-    restaurantId: '5',
-    restaurantImage: 'https://images.unsplash.com/photo-1550966871-3ed3cdb5ed0c?w=800&h=600&fit=crop',
-    restaurantAddress: '567 Maple Drive, West End',
-    date: '2024-10-15',
-    time: '8:00 PM',
-    partySize: 2,
-    status: 'completed',
-    confirmationCode: 'LJ3421',
-    experience: 'Wine Pairing Experience',
-    pointsEarned: 890,
-  },
-];
-
-const mockWaitlist: WaitlistEntry[] = [
-  {
-    id: 'wait-1',
-    restaurantName: 'Bella Vista',
-    restaurantImage: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
-    position: 3,
-    totalWaiting: 12,
-    estimatedWait: 25,
-    partySize: 2,
-    notifyReady: true,
-  },
-  {
-    id: 'wait-2',
-    restaurantName: 'The Steakhouse',
-    restaurantImage: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&h=600&fit=crop',
-    position: 1,
-    totalWaiting: 8,
-    estimatedWait: 10,
-    partySize: 4,
-    notifyReady: true,
-  },
-  {
-    id: 'wait-3',
-    restaurantName: 'Fusion Kitchen',
-    restaurantImage: 'https://images.unsplash.com/photo-1552566626-52f8b828add9?w=800&h=600&fit=crop',
-    position: 5,
-    totalWaiting: 15,
-    estimatedWait: 35,
-    partySize: 6,
-    notifyReady: false,
-  },
-];
-
 const mockAIRecommendations: AIRecommendation[] = [
   {
     type: 'rebook',
@@ -517,7 +574,7 @@ const AIConciergeCard = ({ recommendation, onAction }: AIConciergeCardProps) => 
 
 // Experience Card (for Experiences tab)
 interface ExperienceCardProps {
-  experience: Experience;
+  experience: MockExperience;
   onBook: () => void;
 }
 
@@ -533,7 +590,7 @@ const ExperienceCard = ({ experience, onBook }: ExperienceCardProps) => {
       >
         <div className="relative h-48">
           <img
-            src={experience.restaurantImage}
+            src={experience.restaurantImage || 'https://images.unsplash.com/photo-1514933651103-005eec06c04b?w=800&h=600&fit=crop'}
             alt={experience.restaurantName}
             className="w-full h-full object-cover"
           />
@@ -543,7 +600,7 @@ const ExperienceCard = ({ experience, onBook }: ExperienceCardProps) => {
             </Badge>
           </div>
           <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
-            <div className="text-2xl mb-1">{experience.icon}</div>
+            {experience.icon && <div className="text-2xl mb-1">{experience.icon}</div>}
             <div className="text-white text-sm">{experience.restaurantName}</div>
           </div>
         </div>
@@ -557,7 +614,7 @@ const ExperienceCard = ({ experience, onBook }: ExperienceCardProps) => {
           <p className="text-sm text-slate-400">{experience.description}</p>
           
           <div className="space-y-1">
-            {experience.includes.slice(0, 3).map((item, idx) => (
+            {experience.includes?.slice(0, 3).map((item, idx) => (
               <div key={idx} className="flex items-center gap-2 text-xs text-slate-500">
                 <Check className="w-3 h-3 text-green-400" />
                 {item}
@@ -566,7 +623,9 @@ const ExperienceCard = ({ experience, onBook }: ExperienceCardProps) => {
           </div>
 
           <div className="pt-2">
-            <div className="text-xs text-slate-500 mb-2">Available: {experience.date}</div>
+            {experience.date && (
+              <div className="text-xs text-slate-500 mb-2">Available: {experience.date}</div>
+            )}
             <Button className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700">
               Book Experience
               <ChevronRight className="w-4 h-4 ml-2" />
@@ -580,7 +639,7 @@ const ExperienceCard = ({ experience, onBook }: ExperienceCardProps) => {
 
 // Waitlist Card
 interface WaitlistCardProps {
-  entry: WaitlistEntry;
+  entry: MockWaitlistEntry;
   onLeave: () => void;
 }
 
@@ -646,9 +705,16 @@ const WaitlistCard = ({ entry, onLeave }: WaitlistCardProps) => {
 
 // Main Component
 export function ConsumerApp({ 
-  activeView: externalActiveView}: { 
+  activeView: externalActiveView,
+  onViewChange,
+  isDemoMode = false,
+  currentUser
+}: { 
   activeView?: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile';
   onViewChange?: (view: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile') => void;
+  isDemoMode?: boolean;
+  currentUser?: FirebaseUser | null;
+  userProfile?: UserProfile | null;
 } = {}) {
   const [activeView, setActiveView] = useState<'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile'>(externalActiveView || 'discover');
   const [searchQuery, setSearchQuery] = useState('');
@@ -656,12 +722,220 @@ export function ConsumerApp({
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [selectedTime, setSelectedTime] = useState<string>(roundToNearest15(new Date()));
   const [partySize, setPartySize] = useState('2');
-  const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
-  const [, setSelectedExperience] = useState<Experience | null>(null);
-  const [, setBookingStep] = useState<'time' | 'experience' | 'confirm'>('time');
+  const [selectedRestaurant, setSelectedRestaurant] = useState<MockRestaurant | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_selectedExperience, setSelectedExperience] = useState<MockExperience | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_bookingStep, setBookingStep] = useState<'time' | 'experience' | 'confirm'>('time');
   const [reservationTime, setReservationTime] = useState('');
   const [reservationExperience, setReservationExperience] = useState<string | null>(null);
-  const [modifyingReservation, setModifyingReservation] = useState<Reservation | null>(null);
+  const [modifyingReservation, setModifyingReservation] = useState<MockReservation | null>(null);
+  
+  // Data loading states
+  const [restaurants, setRestaurants] = useState<MockRestaurant[]>([]);
+  const [reservations, setReservations] = useState<MockReservation[]>([]);
+  const [experiences, setExperiences] = useState<MockExperience[]>([]);
+  const [waitlist, setWaitlist] = useState<MockWaitlistEntry[]>([]);
+  const [favoriteRestaurants, setFavoriteRestaurants] = useState<MockRestaurant[]>([]);
+  const [isLoadingRestaurants, setIsLoadingRestaurants] = useState(false);
+  const [isLoadingReservations, setIsLoadingReservations] = useState(false);
+  const [isLoadingExperiences, setIsLoadingExperiences] = useState(false);
+  const [isLoadingWaitlist, setIsLoadingWaitlist] = useState(false);
+  const [isLoadingFavorites, setIsLoadingFavorites] = useState(false);
+  
+  // Restaurant details dialog state
+  const [viewingRestaurantDetails, setViewingRestaurantDetails] = useState(false);
+  const [isFavorite, setIsFavorite] = useState(false);
+
+  // Profile states
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [isLoadingProfile, setIsLoadingProfile] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editedProfile, setEditedProfile] = useState<Partial<UserProfile>>({});
+
+  // Settings dialog states
+  const [openSettingsDialog, setOpenSettingsDialog] = useState<'personal' | 'payment' | 'dining' | 'notifications' | 'privacy' | null>(null);
+  
+  // Settings data states
+  const [notificationSettings, setNotificationSettings] = useState({
+    email: true,
+    sms: true,
+    push: true,
+    reservationReminders: true,
+    waitlistUpdates: true,
+    promotions: false,
+  });
+  
+  const [diningPreferences, setDiningPreferences] = useState({
+    favoriteCuisines: ['Italian', 'Japanese'],
+    dietaryRestrictions: ['Vegetarian'],
+    spiceLevel: 'Medium',
+    seatingPreference: 'Window',
+  });
+  
+  const [paymentMethods, setPaymentMethods] = useState([
+    { id: '1', type: 'Visa', last4: '4242', expiry: '12/25', isDefault: true },
+    { id: '2', type: 'Mastercard', last4: '8888', expiry: '08/26', isDefault: false },
+  ]);
+
+  // Load data on mount - either from demo or Firebase
+  useEffect(() => {
+    if (isDemoMode) {
+      // Load demo data
+      const demoData = getDemoData();
+      // Transform demo restaurants to ensure hours are strings
+      const transformedDemoRestaurants = demoData.restaurants.map(transformToMockRestaurant);
+      setRestaurants(transformedDemoRestaurants);
+      setReservations(demoData.reservations as unknown as MockReservation[]);
+      setExperiences(demoData.experiences as unknown as MockExperience[]);
+      setWaitlist(demoData.waitlist as unknown as MockWaitlistEntry[]);
+      setProfile(demoUserProfile);
+    } else {
+      // Load real data from Firebase
+      loadFirebaseData();
+    }
+  }, [isDemoMode, currentUser]);
+
+  // Load Firebase data
+  const loadFirebaseData = async () => {
+    if (!currentUser) return;
+
+    // Fetch restaurants
+    setIsLoadingRestaurants(true);
+    try {
+      const restaurantsData = await fetchRestaurants();
+      // Transform Firebase restaurants to MockRestaurant format with all display fields
+      const transformedRestaurants = restaurantsData.map(transformToMockRestaurant);
+      setRestaurants(transformedRestaurants);
+    } catch (error) {
+      console.error('Error loading restaurants:', error);
+      setRestaurants([]); // Set empty array on error
+      toast.error('Failed to load restaurants');
+    } finally {
+      setIsLoadingRestaurants(false);
+    }
+
+    // Fetch user's reservations
+    setIsLoadingReservations(true);
+    try {
+      const reservationsData = await fetchUserReservations(currentUser.uid);
+      setReservations(reservationsData as unknown as MockReservation[]);
+    } catch (error) {
+      console.error('Error loading reservations:', error);
+      toast.error('Failed to load reservations');
+    } finally {
+      setIsLoadingReservations(false);
+    }
+
+    // Fetch all experiences (public)
+    setIsLoadingExperiences(true);
+    try {
+      const experiencesData = await fetchAllExperiences();
+      setExperiences(experiencesData as unknown as MockExperience[]);
+    } catch (error) {
+      console.error('Error loading experiences:', error);
+      toast.error('Failed to load experiences');
+    } finally {
+      setIsLoadingExperiences(false);
+    }
+
+    // Fetch user's waitlist
+    setIsLoadingWaitlist(true);
+    try {
+      const waitlistData = await fetchUserWaitlist(currentUser.uid);
+      setWaitlist(waitlistData as unknown as MockWaitlistEntry[]);
+    } catch (error) {
+      console.error('Error loading waitlist:', error);
+      toast.error('Failed to load waitlist');
+    } finally {
+      setIsLoadingWaitlist(false);
+    }
+
+    // Fetch user profile
+    setIsLoadingProfile(true);
+    try {
+      const profileData = await fetchUserProfile(currentUser.uid);
+      setProfile(profileData);
+      
+      // Load settings from profile if they exist
+      if (profileData) {
+        if (profileData.notificationSettings) {
+          setNotificationSettings(profileData.notificationSettings);
+        }
+        if (profileData.diningPreferences) {
+          setDiningPreferences(profileData.diningPreferences);
+        }
+        if (profileData.paymentMethods) {
+          setPaymentMethods(profileData.paymentMethods);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading profile:', error);
+    } finally {
+      setIsLoadingProfile(false);
+    }
+
+    // Fetch user's favorite restaurants
+    setIsLoadingFavorites(true);
+    try {
+      const favoritesData = await fetchFavoriteRestaurants(currentUser.uid);
+      const transformedFavorites = favoritesData.map(transformToMockRestaurant);
+      setFavoriteRestaurants(transformedFavorites);
+    } catch (error) {
+      console.error('Error loading favorites:', error);
+    } finally {
+      setIsLoadingFavorites(false);
+    }
+  };
+
+  // Settings save handlers
+  const handleSaveNotificationSettings = async () => {
+    if (!isDemoMode && currentUser) {
+      const success = await updateNotificationSettings(currentUser.uid, notificationSettings);
+      if (success) {
+        toast.success('Notification settings saved');
+      } else {
+        toast.error('Failed to save notification settings');
+        return;
+      }
+    } else {
+      toast.success('Notification settings saved (demo mode)');
+    }
+    setOpenSettingsDialog(null);
+  };
+
+  const handleSaveDiningPreferences = async () => {
+    if (!isDemoMode && currentUser) {
+      const success = await updateDiningPreferences(currentUser.uid, diningPreferences);
+      if (success) {
+        toast.success('Dining preferences updated');
+      } else {
+        toast.error('Failed to update dining preferences');
+        return;
+      }
+    } else {
+      toast.success('Dining preferences updated (demo mode)');
+    }
+    setOpenSettingsDialog(null);
+  };
+
+  const handleRemovePaymentMethod = async (cardId: string) => {
+    const updatedMethods = paymentMethods.filter(c => c.id !== cardId);
+    setPaymentMethods(updatedMethods);
+    
+    if (!isDemoMode && currentUser) {
+      const success = await updatePaymentMethods(currentUser.uid, updatedMethods);
+      if (success) {
+        toast.success('Card removed');
+      } else {
+        toast.error('Failed to remove card');
+        // Revert on failure
+        setPaymentMethods(paymentMethods);
+      }
+    } else {
+      toast.success('Card removed (demo mode)');
+    }
+  };
 
   // Update activeView when external prop changes
   useEffect(() => {
@@ -671,29 +945,72 @@ export function ConsumerApp({
   }, [externalActiveView]);
 
   // Handle view change
+  const handleViewChange = (view: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile') => {
+    setActiveView(view);
+    if (onViewChange) {
+      onViewChange(view);
+    }
+  };
 
   // Filter restaurants based on committed search (only when button is clicked)
-  const filteredRestaurants = mockRestaurants.filter(restaurant =>
-    restaurant.name.toLowerCase().includes(committedSearchQuery.toLowerCase()) ||
-    restaurant.cuisine.toLowerCase().includes(committedSearchQuery.toLowerCase()) ||
-    restaurant.description.toLowerCase().includes(committedSearchQuery.toLowerCase())
+  const filteredRestaurants = restaurants.filter(restaurant =>
+    (restaurant?.name?.toLowerCase() || '').includes(committedSearchQuery.toLowerCase()) ||
+    (restaurant?.cuisine?.toLowerCase() || '').includes(committedSearchQuery.toLowerCase()) ||
+    (restaurant?.description?.toLowerCase() || '').includes(committedSearchQuery.toLowerCase())
   );
 
   // Filter experiences based on committed search (only when button is clicked)
-  const filteredExperiences = mockExperiences.filter(exp =>
-    exp.name.toLowerCase().includes(committedSearchQuery.toLowerCase()) ||
-    exp.description.toLowerCase().includes(committedSearchQuery.toLowerCase()) ||
-    exp.restaurantName.toLowerCase().includes(committedSearchQuery.toLowerCase())
+  const filteredExperiences = experiences.filter(exp =>
+    (exp?.name?.toLowerCase() || '').includes(committedSearchQuery.toLowerCase()) ||
+    (exp?.description?.toLowerCase() || '').includes(committedSearchQuery.toLowerCase()) ||
+    (exp?.restaurantName?.toLowerCase() || '').includes(committedSearchQuery.toLowerCase())
   );
 
-  const handleBookRestaurant = (restaurant: Restaurant) => {
+  const handleBookRestaurant = async (restaurant: MockRestaurant) => {
     setSelectedRestaurant(restaurant);
+    setViewingRestaurantDetails(true);
     setBookingStep('time');
     setReservationTime('');
     setReservationExperience(null);
+    
+    // Check if restaurant is in favorites
+    if (!isDemoMode && currentUser) {
+      const favs = await fetchFavoriteRestaurants(currentUser.uid);
+      setIsFavorite(favs.some(fav => fav.id === restaurant.id));
+    }
   };
 
-  const handleBookExperience = (experience: Experience) => {
+  const handleToggleFavorite = async () => {
+    if (!currentUser || !selectedRestaurant) return;
+    
+    if (isFavorite) {
+      const success = await removeFavoriteRestaurant(currentUser.uid, selectedRestaurant.id);
+      if (success) {
+        setIsFavorite(false);
+        toast.success('Removed from favorites');
+        // Refresh favorites list
+        const favoritesData = await fetchFavoriteRestaurants(currentUser.uid);
+        const transformedFavorites = favoritesData.map(transformToMockRestaurant);
+        setFavoriteRestaurants(transformedFavorites);
+      } else {
+        toast.error('Failed to remove from favorites');
+      }
+    } else {
+      const success = await addFavoriteRestaurant(currentUser.uid, selectedRestaurant.id);
+      if (success) {
+        setIsFavorite(true);
+        toast.success('Added to favorites');
+        // Refresh favorites list
+        const favoritesData = await fetchFavoriteRestaurants(currentUser.uid);
+        const transformedFavorites = favoritesData.map(transformToMockRestaurant);
+        setFavoriteRestaurants(transformedFavorites);
+      } else {
+        toast.error('Failed to add to favorites');
+      }
+    }
+  };
+
+  const handleBookExperience = (experience: MockExperience) => {
     const restaurant = mockRestaurants.find(r => r.id === experience.restaurantId);
     if (restaurant) {
       setSelectedRestaurant(restaurant);
@@ -703,23 +1020,65 @@ export function ConsumerApp({
     }
   };
 
-  const handleCompleteBooking = () => {
-    toast.success(
-      <div>
-        <div className="font-bold">Reservation Confirmed!</div>
-        <div className="text-sm">
-          {selectedRestaurant?.name} - {reservationTime}
-          {reservationExperience && ` with ${reservationExperience}`}
+  const handleCompleteBooking = async () => {
+    if (!selectedRestaurant || !reservationTime) return;
+
+    // Create reservation in Firebase
+    if (!isDemoMode && currentUser) {
+      const reservationData = {
+        userId: currentUser.uid,
+        restaurantId: selectedRestaurant.id,
+        restaurantName: selectedRestaurant.name,
+        restaurantImage: selectedRestaurant.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
+        date: selectedDate.toISOString(),
+        time: reservationTime,
+        partySize: parseInt(partySize),
+        status: 'confirmed' as const,
+        specialRequests: reservationExperience || undefined,
+        createdAt: new Date().toISOString(),
+      };
+
+      const reservationId = await createReservation(reservationData);
+      
+      if (reservationId) {
+        toast.success(
+          <div>
+            <div className="font-bold">Reservation Confirmed!</div>
+            <div className="text-sm">
+              {selectedRestaurant.name} - {reservationTime}
+              {reservationExperience && ` with ${reservationExperience}`}
+            </div>
+          </div>
+        );
+        
+        // Refresh reservations list
+        const reservationsData = await fetchUserReservations(currentUser.uid);
+        setReservations(reservationsData as unknown as MockReservation[]);
+      } else {
+        toast.error('Failed to create reservation');
+        return;
+      }
+    } else {
+      // Demo mode - just show success toast
+      toast.success(
+        <div>
+          <div className="font-bold">Reservation Confirmed! (Demo Mode)</div>
+          <div className="text-sm">
+            {selectedRestaurant.name} - {reservationTime}
+            {reservationExperience && ` with ${reservationExperience}`}
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
+
     setSelectedRestaurant(null);
     setSelectedExperience(null);
     setReservationTime('');
     setReservationExperience(null);
+    setViewingRestaurantDetails(false);
   };
 
-  const handleModifyReservation = (reservation: Reservation) => {
+  const handleModifyReservation = (reservation: MockReservation) => {
     const restaurant = mockRestaurants.find(r => r.id === reservation.restaurantId);
     if (restaurant) {
       setModifyingReservation(reservation);
@@ -737,12 +1096,66 @@ export function ConsumerApp({
     setReservationTime('');
   };
 
-  const handleJoinWaitlist = (restaurant: Restaurant) => {
+  const handleJoinWaitlist = (restaurant: MockRestaurant) => {
     toast.success(`Added to waitlist at ${restaurant.name}`);
   };
 
-  const handleLeaveWaitlist = () => {
+  const handleLeaveWaitlist = (entryId: string) => {
+    // TODO: Implement Firebase waitlist removal with entryId
+    void entryId; // Currently unused but will be used for Firebase integration
     toast.info('Removed from waitlist');
+  };
+
+  // Profile editing handlers
+  const handleEditProfile = () => {
+    if (profile) {
+      setEditedProfile({
+        displayName: profile.displayName,
+        username: profile.username,
+        phoneNumber: profile.phoneNumber,
+      });
+      setIsEditingProfile(true);
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    if (!profile) return;
+
+    if (isDemoMode) {
+      // Demo mode: just update local state
+      setProfile({ ...profile, ...editedProfile });
+      toast.success('Profile updated successfully!');
+      setIsEditingProfile(false);
+    } else if (currentUser) {
+      // Real mode: update Firebase
+      const success = await updateUserProfile(currentUser.uid, editedProfile);
+      if (success) {
+        // Reload profile data
+        const updated = await fetchUserProfile(currentUser.uid);
+        setProfile(updated);
+        toast.success('Profile updated successfully!');
+        setIsEditingProfile(false);
+      } else {
+        toast.error('Failed to update profile');
+      }
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditingProfile(false);
+    setEditedProfile({});
+  };
+
+  // Sign out handler
+  const handleSignOut = async () => {
+    try {
+      await signOutUser();
+      toast.success('Signed out successfully');
+      // The auth state listener will handle the UI update
+    } catch (error) {
+      toast.error('Failed to sign out');
+      console.error('Sign out error:', error);
+    }
   };
 
   return (
@@ -901,8 +1314,34 @@ export function ConsumerApp({
             {/* Restaurant Listings */}
             <div data-section="restaurants">
               <h2 className="text-2xl text-slate-100 mb-4">Available Restaurants</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredRestaurants.map(restaurant => (
+              {isLoadingRestaurants ? (
+                <div className="text-center py-12">
+                  <p className="text-slate-400">Loading restaurants...</p>
+                </div>
+              ) : filteredRestaurants.length === 0 ? (
+                <Card className="p-12 bg-slate-800/50 border-slate-700 text-center">
+                  <Utensils className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                  <h3 className="text-xl text-slate-300 mb-2">No Restaurants Available</h3>
+                  <p className="text-slate-500">
+                    {committedSearchQuery ? 
+                      `No restaurants found matching "${committedSearchQuery}". Try a different search.` : 
+                      'No restaurants are available at the moment. Please check back later.'}
+                  </p>
+                  {committedSearchQuery && (
+                    <Button 
+                      className="mt-6 bg-blue-600 hover:bg-blue-700"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setCommittedSearchQuery('');
+                      }}
+                    >
+                      Clear Search
+                    </Button>
+                  )}
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {filteredRestaurants.map(restaurant => (
                   <motion.div
                     key={restaurant.id}
                     whileHover={{ scale: 1.02 }}
@@ -957,7 +1396,7 @@ export function ConsumerApp({
                           </div>
                         )}
 
-                        {restaurant.ambiance && (
+                        {restaurant.ambiance && restaurant.ambiance.vibe && (
                           <div className="flex items-center gap-2 flex-wrap">
                             {restaurant.ambiance.vibe.slice(0, 3).map((v, i) => (
                               <Badge key={i} variant="outline" className="text-xs border-slate-700">
@@ -988,8 +1427,9 @@ export function ConsumerApp({
                       </div>
                     </Card>
                   </motion.div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </motion.div>
         )}
@@ -1025,15 +1465,37 @@ export function ConsumerApp({
             </Card>
 
             {/* Experience Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredExperiences.map(experience => (
-                <ExperienceCard
-                  key={experience.id}
-                  experience={experience}
-                  onBook={() => handleBookExperience(experience)}
-                />
-              ))}
-            </div>
+            {isLoadingExperiences ? (
+              <div className="text-center py-12">
+                <p className="text-slate-400">Loading experiences...</p>
+              </div>
+            ) : filteredExperiences.length === 0 ? (
+              <Card className="p-12 bg-slate-800/50 border-slate-700 text-center">
+                <Sparkles className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                <h3 className="text-xl text-slate-300 mb-2">No Experiences Available</h3>
+                <p className="text-slate-500 mb-6">
+                  {committedSearchQuery ? 
+                    `No experiences found matching "${committedSearchQuery}". Try a different search.` : 
+                    'No dining experiences are available at the moment. Explore restaurants to discover unique dining opportunities.'}
+                </p>
+                <Button 
+                  className="bg-blue-600 hover:bg-blue-700"
+                  onClick={() => handleViewChange('discover')}
+                >
+                  Discover Restaurants
+                </Button>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {filteredExperiences.map(experience => (
+                  <ExperienceCard
+                    key={experience.id}
+                    experience={experience}
+                    onBook={() => handleBookExperience(experience)}
+                  />
+                ))}
+              </div>
+            )}
           </motion.div>
         )}
 
@@ -1063,7 +1525,23 @@ export function ConsumerApp({
               </TabsList>
 
               <TabsContent value="upcoming" className="space-y-4 mt-6">
-                {mockReservations.filter(r => r.status === 'upcoming').map(res => (
+                {isLoadingReservations ? (
+                  <div className="text-center py-12">
+                    <p className="text-slate-400">Loading reservations...</p>
+                  </div>
+                ) : reservations.filter(r => r.status === 'confirmed' || r.status === 'pending').length === 0 ? (
+                  <div className="text-center py-12">
+                    <CalendarIcon className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                    <h3 className="text-lg text-slate-300 mb-2">No Upcoming Reservations</h3>
+                    <p className="text-slate-500 mb-6">You don't have any upcoming reservations at the moment.</p>
+                    <Button 
+                      onClick={() => handleViewChange('discover')}
+                      className="bg-blue-600 hover:bg-blue-700"
+                    >
+                      Discover Restaurants
+                    </Button>
+                  </div>
+                ) : reservations.filter(r => r.status === 'confirmed' || r.status === 'pending').map(res => (
                   <Card key={res.id} className="p-5 bg-slate-800/50 border-slate-700">
                     <div className="flex gap-4">
                       {/* Restaurant Image */}
@@ -1084,10 +1562,12 @@ export function ConsumerApp({
                               Confirmed
                             </Badge>
                           </div>
-                          <div className="text-sm text-slate-400 mb-1">
-                            <MapPin className="w-3 h-3 inline mr-1" />
-                            {res.restaurantAddress}
-                          </div>
+                          {res.restaurantAddress && (
+                            <div className="text-sm text-slate-400 mb-1">
+                              <MapPin className="w-3 h-3 inline mr-1" />
+                              {res.restaurantAddress}
+                            </div>
+                          )}
                           <div className="flex items-center gap-4 text-sm text-slate-400">
                             <div className="flex items-center gap-1">
                               <CalendarIcon className="w-4 h-4" />
@@ -1111,9 +1591,11 @@ export function ConsumerApp({
                           </Badge>
                         )}
 
-                        <div className="text-xs text-slate-500">
-                          Confirmation: {res.confirmationCode}
-                        </div>
+                        {res.confirmationCode && (
+                          <div className="text-xs text-slate-500">
+                            Confirmation: {res.confirmationCode}
+                          </div>
+                        )}
 
                         <div className="flex gap-2">
                           <Button
@@ -1147,7 +1629,17 @@ export function ConsumerApp({
               </TabsContent>
 
               <TabsContent value="past" className="space-y-4 mt-6">
-                {mockReservations.filter(r => r.status === 'completed').map(res => (
+                {isLoadingReservations ? (
+                  <div className="text-center py-12">
+                    <p className="text-slate-400">Loading past reservations...</p>
+                  </div>
+                ) : reservations.filter(r => r.status === 'completed').length === 0 ? (
+                  <div className="text-center py-12">
+                    <History className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                    <h3 className="text-lg text-slate-300 mb-2">No Past Reservations</h3>
+                    <p className="text-slate-500">Your dining history will appear here.</p>
+                  </div>
+                ) : reservations.filter(r => r.status === 'completed').map(res => (
                   <Card key={res.id} className="p-5 bg-slate-800/50 border-slate-700">
                     <div className="flex gap-4">
                       {/* Restaurant Image */}
@@ -1217,21 +1709,15 @@ export function ConsumerApp({
             <div className="flex items-center justify-between">
               <h2 className="text-2xl text-slate-100">My Waitlists</h2>
               <Badge className="bg-cyan-500/20 text-cyan-400 border-cyan-500/30">
-                {mockWaitlist.length} Active
+                {waitlist.length} Active
               </Badge>
             </div>
 
-            <div className="space-y-4">
-              {mockWaitlist.map(entry => (
-                <WaitlistCard
-                  key={entry.id}
-                  entry={entry}
-                  onLeave={() => handleLeaveWaitlist()}
-                />
-              ))}
-            </div>
-
-            {mockWaitlist.length === 0 && (
+            {isLoadingWaitlist ? (
+              <div className="text-center py-12">
+                <p className="text-slate-400">Loading waitlist...</p>
+              </div>
+            ) : waitlist.length === 0 ? (
               <Card className="p-12 bg-slate-800/50 border-slate-700 text-center">
                 <Timer className="w-16 h-16 text-slate-600 mx-auto mb-4" />
                 <h3 className="text-xl text-slate-300 mb-2">No Active Waitlists</h3>
@@ -1245,6 +1731,16 @@ export function ConsumerApp({
                   Browse Restaurants
                 </Button>
               </Card>
+            ) : (
+              <div className="space-y-4">
+                {waitlist.map(entry => (
+                  <WaitlistCard
+                    key={entry.id}
+                    entry={entry}
+                    onLeave={() => handleLeaveWaitlist(entry.id)}
+                  />
+                ))}
+              </div>
             )}
           </motion.div>
         )}
@@ -1259,27 +1755,51 @@ export function ConsumerApp({
           >
             <h2 className="text-2xl text-slate-100">Profile & Settings</h2>
 
-            {/* Profile Header */}
-            <Card className="p-6 bg-gradient-to-br from-slate-800/50 to-slate-900/50 border-slate-700">
-              <div className="flex items-center gap-4">
-                <Avatar className="w-20 h-20">
-                  <AvatarImage src="https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=400&h=400&fit=crop" />
-                  <AvatarFallback className="bg-cyan-600 text-white text-xl">JD</AvatarFallback>
-                </Avatar>
-                <div className="flex-1">
-                  <h3 className="text-xl text-slate-100 mb-1">John Doe</h3>
-                  <p className="text-sm text-slate-400 mb-2">john.doe@example.com</p>
-                  <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30">
-                    <Award className="w-3 h-3 mr-1" />
-                    Gold Member
-                  </Badge>
-                </div>
-                <Button variant="outline" size="sm" className="border-slate-600">
-                  <Edit className="w-4 h-4 mr-2" />
-                  Edit Profile
-                </Button>
+            {isLoadingProfile ? (
+              <div className="text-center py-12">
+                <p className="text-slate-400">Loading profile...</p>
               </div>
-            </Card>
+            ) : profile ? (
+              <>
+                {/* Profile Header */}
+                <Card className="p-6 bg-gradient-to-br from-slate-800/50 to-slate-900/50 border-slate-700">
+                  <div className="flex items-center gap-4">
+                    <Avatar className="w-20 h-20">
+                      {profile.photoURL && <AvatarImage src={profile.photoURL} />}
+                      <AvatarFallback className="bg-cyan-600 text-white text-xl">
+                        {profile.displayName?.substring(0, 2).toUpperCase() || 'U'}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1">
+                      <h3 className="text-xl text-slate-100 mb-1">{profile.displayName}</h3>
+                      <p className="text-sm text-slate-400 mb-2">@{profile.username}</p>
+                      <p className="text-xs text-slate-500 mb-2">{profile.email}</p>
+                      {profile.phoneNumber && (
+                        <p className="text-xs text-slate-500 mb-2">{profile.phoneNumber}</p>
+                      )}
+                      <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30">
+                        <Award className="w-3 h-3 mr-1" />
+                        Gold Member
+                      </Badge>
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="border-slate-600"
+                      onClick={handleEditProfile}
+                    >
+                      <Edit className="w-4 h-4 mr-2" />
+                      Edit Profile
+                    </Button>
+                  </div>
+                </Card>
+              </>
+            ) : (
+              <Card className="p-8 bg-slate-800/50 border-slate-700 text-center">
+                <User className="w-12 h-12 mx-auto mb-3 text-slate-600" />
+                <p className="text-slate-400">No profile data available</p>
+              </Card>
+            )}
 
             {/* Rewards & Points */}
             <Card className="p-6 bg-gradient-to-br from-cyan-900/20 to-blue-900/20 border-cyan-500/30">
@@ -1329,7 +1849,10 @@ export function ConsumerApp({
               <h3 className="text-lg text-slate-100">Account Settings</h3>
               
               {/* Personal Information */}
-              <Card className="p-5 bg-slate-800/50 border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-all">
+              <Card 
+                className="p-5 bg-slate-800/50 border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-all"
+                onClick={() => setOpenSettingsDialog('personal')}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center">
@@ -1345,7 +1868,10 @@ export function ConsumerApp({
               </Card>
 
               {/* Payment Methods */}
-              <Card className="p-5 bg-slate-800/50 border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-all">
+              <Card 
+                className="p-5 bg-slate-800/50 border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-all"
+                onClick={() => setOpenSettingsDialog('payment')}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center">
@@ -1353,7 +1879,7 @@ export function ConsumerApp({
                     </div>
                     <div>
                       <div className="text-slate-100">Payment Methods</div>
-                      <div className="text-sm text-slate-500">2 cards saved</div>
+                      <div className="text-sm text-slate-500">{paymentMethods.length} cards saved</div>
                     </div>
                   </div>
                   <ChevronRight className="w-5 h-5 text-slate-500" />
@@ -1361,7 +1887,10 @@ export function ConsumerApp({
               </Card>
 
               {/* Dining Preferences */}
-              <Card className="p-5 bg-slate-800/50 border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-all">
+              <Card 
+                className="p-5 bg-slate-800/50 border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-all"
+                onClick={() => setOpenSettingsDialog('dining')}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center">
@@ -1377,7 +1906,10 @@ export function ConsumerApp({
               </Card>
 
               {/* Notifications */}
-              <Card className="p-5 bg-slate-800/50 border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-all">
+              <Card 
+                className="p-5 bg-slate-800/50 border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-all"
+                onClick={() => setOpenSettingsDialog('notifications')}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center">
@@ -1393,7 +1925,10 @@ export function ConsumerApp({
               </Card>
 
               {/* Privacy & Security */}
-              <Card className="p-5 bg-slate-800/50 border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-all">
+              <Card 
+                className="p-5 bg-slate-800/50 border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-all"
+                onClick={() => setOpenSettingsDialog('privacy')}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center">
@@ -1412,32 +1947,56 @@ export function ConsumerApp({
             {/* Favorites */}
             <div className="space-y-3">
               <h3 className="text-lg text-slate-100">Favorite Restaurants</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {mockRestaurants.slice(0, 4).map(restaurant => (
-                  <Card key={restaurant.id} className="p-4 bg-slate-800/50 border-slate-700 hover:border-cyan-500/50 transition-all cursor-pointer">
-                    <div className="flex gap-3">
-                      <div className="relative w-16 h-16 flex-shrink-0">
-                        <img
-                          src={restaurant.image}
-                          alt={restaurant.name}
-                          className="w-full h-full object-cover rounded"
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between mb-1">
-                          <h4 className="text-slate-100 truncate">{restaurant.name}</h4>
-                          <Heart className="w-4 h-4 fill-red-500 text-red-500 flex-shrink-0 ml-2" />
+              {isLoadingFavorites ? (
+                <Card className="p-8 bg-slate-800/50 border-slate-700 text-center">
+                  <p className="text-slate-400">Loading favorites...</p>
+                </Card>
+              ) : favoriteRestaurants.length === 0 ? (
+                <Card className="p-8 bg-slate-800/50 border-slate-700 text-center">
+                  <Heart className="w-12 h-12 mx-auto mb-3 text-slate-600" />
+                  <h4 className="text-lg text-slate-300 mb-2">No Favorite Restaurants</h4>
+                  <p className="text-slate-500 mb-4">
+                    Mark restaurants as favorites to see them here
+                  </p>
+                  <Button 
+                    className="bg-cyan-600 hover:bg-cyan-700"
+                    onClick={() => setActiveView('discover')}
+                  >
+                    Discover Restaurants
+                  </Button>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {favoriteRestaurants.map(restaurant => (
+                    <Card 
+                      key={restaurant.id} 
+                      className="p-4 bg-slate-800/50 border-slate-700 hover:border-cyan-500/50 transition-all cursor-pointer"
+                      onClick={() => handleBookRestaurant(restaurant)}
+                    >
+                      <div className="flex gap-3">
+                        <div className="relative w-16 h-16 flex-shrink-0">
+                          <img
+                            src={restaurant.image}
+                            alt={restaurant.name}
+                            className="w-full h-full object-cover rounded"
+                          />
                         </div>
-                        <div className="text-sm text-slate-400">{restaurant.cuisine}</div>
-                        <div className="flex items-center gap-1 mt-1">
-                          <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                          <span className="text-xs text-slate-400">{restaurant.rating}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between mb-1">
+                            <h4 className="text-slate-100 truncate">{restaurant.name}</h4>
+                            <Heart className="w-4 h-4 fill-red-500 text-red-500 flex-shrink-0 ml-2" />
+                          </div>
+                          <div className="text-sm text-slate-400">{restaurant.cuisine}</div>
+                          <div className="flex items-center gap-1 mt-1">
+                            <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+                            <span className="text-xs text-slate-400">{restaurant.rating}</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </Card>
-                ))}
-              </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Saved Payment Methods Preview */}
@@ -1474,7 +2033,7 @@ export function ConsumerApp({
             <Button 
               variant="outline" 
               className="w-full border-red-500/30 text-red-400 hover:bg-red-500/10"
-              onClick={() => toast.info('Sign out functionality')}
+              onClick={handleSignOut}
             >
               <LogOut className="w-4 h-4 mr-2" />
               Sign Out
@@ -1484,40 +2043,170 @@ export function ConsumerApp({
       </div>
 
       {/* Booking Dialog */}
-      <Dialog open={selectedRestaurant !== null} onOpenChange={() => {
+      <Dialog open={selectedRestaurant !== null || viewingRestaurantDetails} onOpenChange={() => {
         setSelectedRestaurant(null);
         setSelectedExperience(null);
         setModifyingReservation(null);
         setReservationTime('');
         setReservationExperience(null);
+        setViewingRestaurantDetails(false);
       }}>
         <DialogContent className="bg-slate-800 border-slate-700 max-w-2xl max-h-[90vh] overflow-y-auto">
           {selectedRestaurant && (
             <>
               <DialogHeader>
-                <DialogTitle className="text-2xl text-slate-100">
-                  {modifyingReservation ? 'Modify Reservation' : 'Book a Table'}
-                </DialogTitle>
-                <DialogDescription className="text-slate-400">
-                  {selectedRestaurant.name}
-                </DialogDescription>
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <DialogTitle className="text-2xl text-slate-100">
+                      {modifyingReservation ? 'Modify Reservation' : 'Book a Table'}
+                    </DialogTitle>
+                    <DialogDescription className="text-slate-400">
+                      {selectedRestaurant.name}
+                    </DialogDescription>
+                  </div>
+                  {/* Favorite Button */}
+                  {!isDemoMode && currentUser && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={handleToggleFavorite}
+                      className="flex-shrink-0 ml-2"
+                    >
+                      <Heart 
+                        className={`w-6 h-6 transition-all ${
+                          isFavorite 
+                            ? 'fill-red-500 text-red-500' 
+                            : 'text-slate-400 hover:text-red-500'
+                        }`} 
+                      />
+                    </Button>
+                  )}
+                </div>
               </DialogHeader>
 
               <div className="space-y-6 mt-4">
                 {/* Restaurant Image */}
-                <div className="relative h-48 rounded-lg overflow-hidden">
+                <div className="relative h-64 rounded-lg overflow-hidden">
                   <img
                     src={selectedRestaurant.image}
                     alt={selectedRestaurant.name}
                     className="w-full h-full object-cover"
                   />
+                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-6">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="flex items-center gap-1">
+                        <Star className="w-5 h-5 fill-yellow-400 text-yellow-400" />
+                        <span className="text-lg text-white">{selectedRestaurant.rating}</span>
+                      </div>
+                      <span className="text-slate-300">({selectedRestaurant.reviews} reviews)</span>
+                    </div>
+                    <div className="flex items-center gap-3 text-sm text-slate-300">
+                      <span>{Array(selectedRestaurant.priceLevel).fill('$').join('')}</span>
+                      <span>•</span>
+                      <span>{selectedRestaurant.cuisine}</span>
+                      {selectedRestaurant.distance && (
+                        <>
+                          <span>•</span>
+                          <span className="flex items-center gap-1">
+                            <MapPin className="w-3 h-3" />
+                            {selectedRestaurant.distance}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Restaurant Info */}
+                <div className="space-y-4">
+                  {/* Description */}
+                  <div>
+                    <p className="text-slate-300">{selectedRestaurant.description}</p>
+                  </div>
+
+                  {/* Address & Hours */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <div className="flex items-start gap-2">
+                        <MapPin className="w-4 h-4 text-cyan-400 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <div className="text-xs text-slate-500 mb-1">Address</div>
+                          <div className="text-sm text-slate-300">{selectedRestaurant.address}</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-start gap-2">
+                        <Clock className="w-4 h-4 text-cyan-400 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <div className="text-xs text-slate-500 mb-1">Hours</div>
+                          <div className="text-sm text-slate-300">{formatHoursToString(selectedRestaurant.hours)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Features */}
+                  {selectedRestaurant.features && selectedRestaurant.features.length > 0 && (
+                    <div>
+                      <div className="text-sm text-slate-500 mb-2">Features</div>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedRestaurant.features.map((feature) => (
+                          <Badge key={feature} className="bg-slate-700/50 text-slate-300 border-slate-600">
+                            {feature}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Ambiance */}
+                  {selectedRestaurant.ambiance && (
+                    <div>
+                      <div className="text-sm text-slate-500 mb-2">Ambiance</div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="p-3 bg-slate-700/30 rounded">
+                          <div className="text-xs text-slate-500">Noise Level</div>
+                          <div className="text-sm text-slate-200">{selectedRestaurant.ambiance.noiseLevel}</div>
+                        </div>
+                        <div className="p-3 bg-slate-700/30 rounded">
+                          <div className="text-xs text-slate-500">Lighting</div>
+                          <div className="text-sm text-slate-200">{selectedRestaurant.ambiance.lighting}</div>
+                        </div>
+                        <div className="p-3 bg-slate-700/30 rounded">
+                          <div className="text-xs text-slate-500">Vibe</div>
+                          <div className="text-sm text-slate-200">{selectedRestaurant.ambiance.vibe.join(', ')}</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Dietary Options */}
+                  {selectedRestaurant.dietary && selectedRestaurant.dietary.length > 0 && (
+                    <div>
+                      <div className="text-sm text-slate-500 mb-2">Dietary Options</div>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedRestaurant.dietary.map((option) => (
+                          <Badge key={option} className="bg-green-500/20 text-green-400 border-green-500/30">
+                            <Check className="w-3 h-3 mr-1" />
+                            {option}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Divider */}
+                <div className="border-t border-slate-700 pt-6">
+                  <h4 className="text-lg text-slate-100 mb-4">Make a Reservation</h4>
                 </div>
 
                 {/* Select Time */}
                 <div>
                   <Label className="text-slate-300 mb-2 block">Select Time</Label>
                   <div className="grid grid-cols-3 gap-2">
-                    {selectedRestaurant.availableSlots.map(slot => (
+                    {(selectedRestaurant.availableSlots || ['5:00 PM', '5:30 PM', '6:00 PM', '6:30 PM', '7:00 PM', '7:30 PM', '8:00 PM', '8:30 PM', '9:00 PM']).map(slot => (
                       <Button
                         key={slot}
                         variant={reservationTime === slot ? 'default' : 'outline'}
@@ -1555,7 +2244,7 @@ export function ConsumerApp({
                   <div>
                     <Label className="text-slate-300 mb-2 block">Add an Experience (Optional)</Label>
                     <div className="space-y-2">
-                      {selectedRestaurant.experiences.map(exp => (
+                      {(selectedRestaurant.experiences || []).map(exp => (
                         <Card
                           key={exp.id}
                           className={`p-4 cursor-pointer transition-all ${
@@ -1608,6 +2297,441 @@ export function ConsumerApp({
               </div>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Profile Dialog */}
+      <Dialog open={isEditingProfile} onOpenChange={setIsEditingProfile}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl text-slate-100">Edit Profile</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Update your personal information
+            </DialogDescription>
+          </DialogHeader>
+
+          {profile && (
+            <div className="space-y-6 mt-4">
+              {/* Avatar */}
+              <div className="flex flex-col items-center gap-3">
+                <Avatar className="w-24 h-24">
+                  {editedProfile.photoURL && <AvatarImage src={editedProfile.photoURL} />}
+                  <AvatarFallback className="bg-cyan-600 text-white text-2xl">
+                    {profile.displayName?.substring(0, 2).toUpperCase() || 'U'}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
+                    onClick={() => document.getElementById('photoUpload')?.click()}
+                  >
+                    <User className="w-4 h-4 mr-2" />
+                    Upload Photo
+                  </Button>
+                  <input
+                    id="photoUpload"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        // Convert to data URL for preview
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                          setEditedProfile({ ...editedProfile, photoURL: reader.result as string });
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Display Name */}
+              <div className="space-y-2">
+                <Label htmlFor="displayName" className="text-slate-300">Display Name</Label>
+                <Input
+                  id="displayName"
+                  value={editedProfile.displayName || ''}
+                  onChange={(e) => setEditedProfile({ ...editedProfile, displayName: e.target.value })}
+                  className="bg-slate-700 border-slate-600 text-slate-100"
+                  placeholder="Enter your name"
+                />
+              </div>
+
+              {/* Username */}
+              <div className="space-y-2">
+                <Label htmlFor="username" className="text-slate-300">Username</Label>
+                <Input
+                  id="username"
+                  value={editedProfile.username || ''}
+                  onChange={(e) => setEditedProfile({ ...editedProfile, username: e.target.value })}
+                  className="bg-slate-700 border-slate-600 text-slate-100"
+                  placeholder="Enter username"
+                />
+              </div>
+
+              {/* Email (Read-only) */}
+              <div className="space-y-2">
+                <Label htmlFor="email" className="text-slate-300">Email</Label>
+                <Input
+                  id="email"
+                  value={profile.email}
+                  disabled
+                  className="bg-slate-700/50 border-slate-600 text-slate-500 cursor-not-allowed"
+                />
+                <p className="text-xs text-slate-500">Email cannot be changed</p>
+              </div>
+
+              {/* Phone Number */}
+              <div className="space-y-2">
+                <Label htmlFor="phone" className="text-slate-300">Phone Number</Label>
+                <Input
+                  id="phone"
+                  value={editedProfile.phoneNumber || ''}
+                  onChange={(e) => setEditedProfile({ ...editedProfile, phoneNumber: e.target.value })}
+                  className="bg-slate-700 border-slate-600 text-slate-100"
+                  placeholder="+1 (555) 123-4567"
+                />
+              </div>
+
+              {isDemoMode && (
+                <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
+                  <p className="text-sm text-blue-400">
+                    <strong>Demo Mode:</strong> Changes will be saved locally only.
+                  </p>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-4">
+                <Button
+                  className="flex-1 bg-cyan-600 hover:bg-cyan-700"
+                  onClick={handleSaveProfile}
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  Save Changes
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex-1 border-slate-600 text-slate-300"
+                  onClick={handleCancelEdit}
+                >
+                  <X className="w-4 h-4 mr-2" />
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Personal Information Dialog */}
+      <Dialog open={openSettingsDialog === 'personal'} onOpenChange={(open) => !open && setOpenSettingsDialog(null)}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl text-slate-100">Personal Information</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Update your personal details
+            </DialogDescription>
+          </DialogHeader>
+          {profile && (
+            <div className="space-y-4 mt-4">
+              <div className="space-y-2">
+                <Label className="text-slate-300">Display Name</Label>
+                <Input
+                  value={profile.displayName}
+                  className="bg-slate-700 border-slate-600 text-slate-100"
+                  disabled
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-slate-300">Email</Label>
+                <Input
+                  value={profile.email}
+                  className="bg-slate-700 border-slate-600 text-slate-100"
+                  disabled
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-slate-300">Phone</Label>
+                <Input
+                  value={profile.phoneNumber || 'Not set'}
+                  className="bg-slate-700 border-slate-600 text-slate-100"
+                  disabled
+                />
+              </div>
+              <Button 
+                className="w-full bg-cyan-600 hover:bg-cyan-700"
+                onClick={() => {
+                  setOpenSettingsDialog(null);
+                  handleEditProfile();
+                }}
+              >
+                <Edit className="w-4 h-4 mr-2" />
+                Edit Profile
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Payment Methods Dialog */}
+      <Dialog open={openSettingsDialog === 'payment'} onOpenChange={(open) => !open && setOpenSettingsDialog(null)}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl text-slate-100">Payment Methods</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Manage your saved payment cards
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-4">
+            {paymentMethods.map((card) => (
+              <Card key={card.id} className="p-4 bg-slate-700/50 border-slate-600">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <CreditCard className="w-8 h-8 text-cyan-400" />
+                    <div>
+                      <div className="text-slate-100">{card.type} •••• {card.last4}</div>
+                      <div className="text-sm text-slate-400">Expires {card.expiry}</div>
+                      {card.isDefault && (
+                        <Badge className="mt-1 bg-cyan-500/20 text-cyan-400 border-cyan-500/30">Default</Badge>
+                      )}
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleRemovePaymentMethod(card.id)}
+                  >
+                    <Trash2 className="w-4 h-4 text-red-400" />
+                  </Button>
+                </div>
+              </Card>
+            ))}
+            <Button className="w-full bg-cyan-600 hover:bg-cyan-700">
+              <Plus className="w-4 h-4 mr-2" />
+              Add New Card
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dining Preferences Dialog */}
+      <Dialog open={openSettingsDialog === 'dining'} onOpenChange={(open) => !open && setOpenSettingsDialog(null)}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl text-slate-100">Dining Preferences</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Set your cuisine and dietary preferences
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-4">
+            <div className="space-y-2">
+              <Label className="text-slate-300">Favorite Cuisines</Label>
+              <div className="flex flex-wrap gap-2">
+                {diningPreferences.favoriteCuisines.map((cuisine) => (
+                  <Badge key={cuisine} className="bg-cyan-500/20 text-cyan-400 border-cyan-500/30">
+                    {cuisine}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-300">Dietary Restrictions</Label>
+              <div className="flex flex-wrap gap-2">
+                {diningPreferences.dietaryRestrictions.map((restriction) => (
+                  <Badge key={restriction} className="bg-amber-500/20 text-amber-400 border-amber-500/30">
+                    {restriction}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-300">Spice Level</Label>
+              <Select value={diningPreferences.spiceLevel} onValueChange={(value) => setDiningPreferences({...diningPreferences, spiceLevel: value})}>
+                <SelectTrigger className="bg-slate-700 border-slate-600">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-700 border-slate-600">
+                  <SelectItem value="Mild">Mild</SelectItem>
+                  <SelectItem value="Medium">Medium</SelectItem>
+                  <SelectItem value="Hot">Hot</SelectItem>
+                  <SelectItem value="Extra Hot">Extra Hot</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-300">Seating Preference</Label>
+              <Select value={diningPreferences.seatingPreference} onValueChange={(value) => setDiningPreferences({...diningPreferences, seatingPreference: value})}>
+                <SelectTrigger className="bg-slate-700 border-slate-600">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-700 border-slate-600">
+                  <SelectItem value="Window">Window</SelectItem>
+                  <SelectItem value="Booth">Booth</SelectItem>
+                  <SelectItem value="Bar">Bar</SelectItem>
+                  <SelectItem value="Patio">Patio</SelectItem>
+                  <SelectItem value="No Preference">No Preference</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button 
+              className="w-full bg-cyan-600 hover:bg-cyan-700"
+              onClick={handleSaveDiningPreferences}
+            >
+              <Save className="w-4 h-4 mr-2" />
+              Save Preferences
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Notifications Dialog */}
+      <Dialog open={openSettingsDialog === 'notifications'} onOpenChange={(open) => !open && setOpenSettingsDialog(null)}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl text-slate-100">Notification Settings</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Manage how you receive notifications
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 mt-4">
+            <div>
+              <h4 className="text-slate-300 mb-3">Notification Channels</h4>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 bg-slate-700/30 rounded">
+                  <div className="flex items-center gap-3">
+                    <Mail className="w-5 h-5 text-slate-400" />
+                    <span className="text-slate-100">Email</span>
+                  </div>
+                  <Switch 
+                    checked={notificationSettings.email}
+                    onCheckedChange={(checked) => setNotificationSettings({...notificationSettings, email: checked})}
+                  />
+                </div>
+                <div className="flex items-center justify-between p-3 bg-slate-700/30 rounded">
+                  <div className="flex items-center gap-3">
+                    <Smartphone className="w-5 h-5 text-slate-400" />
+                    <span className="text-slate-100">SMS</span>
+                  </div>
+                  <Switch 
+                    checked={notificationSettings.sms}
+                    onCheckedChange={(checked) => setNotificationSettings({...notificationSettings, sms: checked})}
+                  />
+                </div>
+                <div className="flex items-center justify-between p-3 bg-slate-700/30 rounded">
+                  <div className="flex items-center gap-3">
+                    <Bell className="w-5 h-5 text-slate-400" />
+                    <span className="text-slate-100">Push Notifications</span>
+                  </div>
+                  <Switch 
+                    checked={notificationSettings.push}
+                    onCheckedChange={(checked) => setNotificationSettings({...notificationSettings, push: checked})}
+                  />
+                </div>
+              </div>
+            </div>
+            <div>
+              <h4 className="text-slate-300 mb-3">Notification Types</h4>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 bg-slate-700/30 rounded">
+                  <span className="text-slate-100">Reservation Reminders</span>
+                  <Switch 
+                    checked={notificationSettings.reservationReminders}
+                    onCheckedChange={(checked) => setNotificationSettings({...notificationSettings, reservationReminders: checked})}
+                  />
+                </div>
+                <div className="flex items-center justify-between p-3 bg-slate-700/30 rounded">
+                  <span className="text-slate-100">Waitlist Updates</span>
+                  <Switch 
+                    checked={notificationSettings.waitlistUpdates}
+                    onCheckedChange={(checked) => setNotificationSettings({...notificationSettings, waitlistUpdates: checked})}
+                  />
+                </div>
+                <div className="flex items-center justify-between p-3 bg-slate-700/30 rounded">
+                  <span className="text-slate-100">Promotions & Offers</span>
+                  <Switch 
+                    checked={notificationSettings.promotions}
+                    onCheckedChange={(checked) => setNotificationSettings({...notificationSettings, promotions: checked})}
+                  />
+                </div>
+              </div>
+            </div>
+            <Button 
+              className="w-full bg-cyan-600 hover:bg-cyan-700"
+              onClick={handleSaveNotificationSettings}
+            >
+              <Save className="w-4 h-4 mr-2" />
+              Save Settings
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Privacy & Security Dialog */}
+      <Dialog open={openSettingsDialog === 'privacy'} onOpenChange={(open) => !open && setOpenSettingsDialog(null)}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl text-slate-100">Privacy & Security</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Manage your account security settings
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-4">
+            <Card className="p-4 bg-slate-700/30 border-slate-600 cursor-pointer hover:border-cyan-500/50 transition-all">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Lock className="w-5 h-5 text-cyan-400" />
+                  <div>
+                    <div className="text-slate-100">Change Password</div>
+                    <div className="text-sm text-slate-400">Update your password</div>
+                  </div>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-500" />
+              </div>
+            </Card>
+            <Card className="p-4 bg-slate-700/30 border-slate-600 cursor-pointer hover:border-cyan-500/50 transition-all">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Shield className="w-5 h-5 text-cyan-400" />
+                  <div>
+                    <div className="text-slate-100">Two-Factor Authentication</div>
+                    <div className="text-sm text-slate-400">Add an extra layer of security</div>
+                  </div>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-500" />
+              </div>
+            </Card>
+            <Card className="p-4 bg-slate-700/30 border-slate-600 cursor-pointer hover:border-cyan-500/50 transition-all">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Settings className="w-5 h-5 text-cyan-400" />
+                  <div>
+                    <div className="text-slate-100">Data & Privacy</div>
+                    <div className="text-sm text-slate-400">Control your data</div>
+                  </div>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-500" />
+              </div>
+            </Card>
+            <div className="pt-4 border-t border-slate-700">
+              <Button 
+                variant="outline" 
+                className="w-full border-red-500/30 text-red-400 hover:bg-red-500/10"
+                onClick={() => {
+                  toast.error('This feature is not available in demo mode');
+                }}
+              >
+                <LogOut className="w-4 h-4 mr-2" />
+                Delete Account
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
