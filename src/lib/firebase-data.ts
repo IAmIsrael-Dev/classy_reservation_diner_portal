@@ -14,7 +14,7 @@ import {
   Timestamp,
   QueryDocumentSnapshot
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, auth } from './firebase';
 import type { 
   Restaurant, 
   Reservation, 
@@ -193,103 +193,228 @@ export interface PaginatedResult<T> {
 
 /**
  * Fetch restaurants with pagination
+ * Note: restaurant-owners collection is keyed by userId (restaurant owner's ID)
+ * Each document represents one restaurant owner's restaurant
  */
 export async function fetchRestaurantsPaginated(
   pageSize: number = 20,
   lastDoc?: QueryDocumentSnapshot
 ): Promise<PaginatedResult<Restaurant>> {
   try {
-    const restaurantsRef = collection(db, 'restaurants');
-    let q = query(restaurantsRef, orderBy('name', 'asc'), limit(pageSize + 1));
+    console.log('🔍 Fetching restaurants (paginated) from collection: restaurant-owners');
+    console.log('📝 Note: Collection is keyed by restaurant owner userId');
+    console.log('🔐 Current auth user:', auth.currentUser ? auth.currentUser.uid : 'NONE');
+    
+    const restaurantsRef = collection(db, 'restaurant-owners');
+    // Don't order by 'name' field - it might not exist. Order by document ID instead or remove ordering
+    let q = query(restaurantsRef, limit(pageSize + 1));
     
     if (lastDoc) {
-      q = query(restaurantsRef, orderBy('name', 'asc'), startAfter(lastDoc), limit(pageSize + 1));
+      console.log('📄 Continuing from last document:', lastDoc.id);
+      q = query(restaurantsRef, startAfter(lastDoc), limit(pageSize + 1));
     }
     
+    console.log('📤 Executing query...');
     const querySnapshot = await getDocs(q);
+    
+    console.log('📥 Query complete. Documents found:', querySnapshot.size);
+    
     const restaurants: Restaurant[] = [];
-    const docs = querySnapshot.docs;
-    
-    const hasMore = docs.length > pageSize;
-    const limitedDocs = hasMore ? docs.slice(0, pageSize) : docs;
-    
-    limitedDocs.forEach((doc) => {
+    querySnapshot.forEach((doc) => {
+      console.log('  📄 Processing doc (userId):', doc.id);
       const data = doc.data();
-      restaurants.push({ 
-        id: doc.id, 
-        ...data,
-        cuisine: Array.isArray(data.cuisine) ? data.cuisine : [data.cuisine],
-        images: Array.isArray(data.images) ? data.images : [data.images],
-      } as Restaurant);
+      console.log('  📝 Document data keys:', Object.keys(data));
+      console.log('  📝 restaurantName:', data.restaurantName);
+      console.log('  📝 cuisineType:', data.cuisineType);
+      console.log('  📝 photos:', data.photos);
+      
+      // Map the actual Firebase fields to our Restaurant interface
+      const restaurant: Restaurant = {
+        id: doc.id, // Note: This is the restaurant owner's userId
+        name: data.restaurantName || data.name || 'Unknown Restaurant',
+        description: data.description || '',
+        cuisine: data.cuisineType ? [data.cuisineType] : (Array.isArray(data.cuisine) ? data.cuisine : []),
+        priceRange: data.priceRange || 2,
+        rating: data.rating || 4.0,
+        reviewCount: data.reviewCount || 0,
+        address: data.address || '',
+        city: data.city || '',
+        state: data.state || '',
+        zipCode: data.zipCode || '',
+        phone: data.phone || '',
+        email: data.email || '',
+        website: data.website,
+        images: Array.isArray(data.photos) ? data.photos : (Array.isArray(data.images) ? data.images : []),
+        hours: data.openingHours || data.hours || {},
+        amenities: Array.isArray(data.amenities) ? data.amenities : [],
+        dietaryOptions: Array.isArray(data.dietaryOptions) ? data.dietaryOptions : [],
+        createdAt: data.createdAt || new Date().toISOString(),
+        updatedAt: data.updatedAt
+      };
+      
+      console.log('  ✅ Mapped restaurant:', restaurant.name, '| Cuisine:', restaurant.cuisine, '| Images:', restaurant.images.length);
+      restaurants.push(restaurant);
     });
+    
+    console.log('✅ Successfully processed restaurants:', restaurants.length);
     
     return {
       data: restaurants,
-      lastDoc: limitedDocs[limitedDocs.length - 1] || null,
-      hasMore
+      lastDoc: querySnapshot.docs[querySnapshot.docs.length - 1] || null,
+      hasMore: querySnapshot.docs.length > pageSize
     };
   } catch (error) {
-    console.error('Error fetching restaurants:', error);
+    console.error('❌ Error fetching restaurants:', error);
+    if (error instanceof Error) {
+      console.error('  Error message:', error.message);
+      console.error('  Error stack:', error.stack);
+    }
     return { data: [], lastDoc: null, hasMore: false };
   }
 }
 
 /**
  * Fetch all restaurants from Firestore (with caching)
+ * Note: restaurant-owners collection is keyed by userId (restaurant owner's ID)
+ * Each document represents one restaurant owner's restaurant
  */
 export async function fetchRestaurants(): Promise<Restaurant[]> {
   const cacheKey = 'all_restaurants';
   const cached = getCachedData<Restaurant[]>(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    console.log('✅ Returning cached restaurants:', cached.length);
+    return cached;
+  }
 
   try {
-    const restaurantsRef = collection(db, 'restaurants');
-    const q = query(restaurantsRef, orderBy('name', 'asc'));
+    console.log('🔍 Fetching restaurants from collection: restaurant-owners');
+    console.log('📝 Note: Collection is keyed by restaurant owner userId');
+    console.log('🔐 Current auth user:', auth.currentUser ? auth.currentUser.uid : 'NONE');
+    
+    const restaurantsRef = collection(db, 'restaurant-owners');
+    // Don't use orderBy since 'name' field might not exist
+    const q = query(restaurantsRef);
+    
+    console.log('📤 Executing query...');
     const querySnapshot = await getDocs(q);
+    
+    console.log('📥 Query complete. Documents found:', querySnapshot.size);
     
     const restaurants: Restaurant[] = [];
     querySnapshot.forEach((doc) => {
+      console.log('  📄 Processing doc (userId):', doc.id);
       const data = doc.data();
-      restaurants.push({ 
-        id: doc.id, 
-        ...data,
-        cuisine: Array.isArray(data.cuisine) ? data.cuisine : [data.cuisine],
-        images: Array.isArray(data.images) ? data.images : [data.images],
-      } as Restaurant);
+      console.log('  📝 Document data keys:', Object.keys(data));
+      console.log('  📝 restaurantName:', data.restaurantName);
+      console.log('  📝 cuisineType:', data.cuisineType);
+      console.log('  📝 photos:', data.photos);
+      
+      // Map the actual Firebase fields to our Restaurant interface
+      const restaurant: Restaurant = {
+        id: doc.id, // Note: This is the restaurant owner's userId
+        name: data.restaurantName || data.name || 'Unknown Restaurant',
+        description: data.description || '',
+        cuisine: data.cuisineType ? [data.cuisineType] : (Array.isArray(data.cuisine) ? data.cuisine : []),
+        priceRange: data.priceRange || 2,
+        rating: data.rating || 4.0,
+        reviewCount: data.reviewCount || 0,
+        address: data.address || '',
+        city: data.city || '',
+        state: data.state || '',
+        zipCode: data.zipCode || '',
+        phone: data.phone || '',
+        email: data.email || '',
+        website: data.website,
+        images: Array.isArray(data.photos) ? data.photos : (Array.isArray(data.images) ? data.images : []),
+        hours: data.openingHours || data.hours || {},
+        amenities: Array.isArray(data.amenities) ? data.amenities : [],
+        dietaryOptions: Array.isArray(data.dietaryOptions) ? data.dietaryOptions : [],
+        createdAt: data.createdAt || new Date().toISOString(),
+        updatedAt: data.updatedAt
+      };
+      
+      console.log('  ✅ Mapped restaurant:', restaurant.name, '| Cuisine:', restaurant.cuisine, '| Images:', restaurant.images.length);
+      restaurants.push(restaurant);
     });
     
+    console.log('✅ Successfully fetched restaurants:', restaurants.length);
     setCachedData(cacheKey, restaurants);
     return restaurants;
   } catch (error) {
-    console.error('Error fetching restaurants:', error);
+    console.error('❌ Error fetching restaurants:', error);
+    if (error instanceof Error) {
+      console.error('  Error name:', error.name);
+      console.error('  Error message:', error.message);
+      console.error('  Error stack:', error.stack);
+    }
     return [];
   }
 }
 
 /**
  * Fetch a single restaurant by ID
+ * Note: The ID is actually the restaurant owner's userId
  */
 export async function fetchRestaurantById(restaurantId: string): Promise<Restaurant | null> {
   const cacheKey = `restaurant_${restaurantId}`;
   const cached = getCachedData<Restaurant>(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    console.log('✅ Returning cached restaurant:', restaurantId);
+    return cached;
+  }
 
   try {
-    const restaurantDoc = await getDoc(doc(db, 'restaurants', restaurantId));
+    console.log('🔍 Fetching restaurant by ID (owner userId):', restaurantId);
+    console.log('📝 Note: ID is the restaurant owner\'s userId in restaurant-owners collection');
+    console.log('🔐 Current auth user:', auth.currentUser ? auth.currentUser.uid : 'NONE');
+    
+    const restaurantDoc = await getDoc(doc(db, 'restaurant-owners', restaurantId));
+    
     if (restaurantDoc.exists()) {
+      console.log('✅ Restaurant found for owner userId:', restaurantId);
       const data = restaurantDoc.data();
-      const restaurant = { 
-        id: restaurantDoc.id, 
-        ...data,
-        cuisine: Array.isArray(data.cuisine) ? data.cuisine : [data.cuisine],
-        images: Array.isArray(data.images) ? data.images : [data.images],
-      } as Restaurant;
+      console.log('  📝 Document data keys:', Object.keys(data));
+      console.log('  📝 restaurantName:', data.restaurantName);
+      console.log('  📝 cuisineType:', data.cuisineType);
+      console.log('  📝 photos:', data.photos);
+      
+      // Map the actual Firebase fields to our Restaurant interface
+      const restaurant: Restaurant = {
+        id: restaurantDoc.id, // This is the restaurant owner's userId
+        name: data.restaurantName || data.name || 'Unknown Restaurant',
+        description: data.description || '',
+        cuisine: data.cuisineType ? [data.cuisineType] : (Array.isArray(data.cuisine) ? data.cuisine : []),
+        priceRange: data.priceRange || 2,
+        rating: data.rating || 4.0,
+        reviewCount: data.reviewCount || 0,
+        address: data.address || '',
+        city: data.city || '',
+        state: data.state || '',
+        zipCode: data.zipCode || '',
+        phone: data.phone || '',
+        email: data.email || '',
+        website: data.website,
+        images: Array.isArray(data.photos) ? data.photos : (Array.isArray(data.images) ? data.images : []),
+        hours: data.openingHours || data.hours || {},
+        amenities: Array.isArray(data.amenities) ? data.amenities : [],
+        dietaryOptions: Array.isArray(data.dietaryOptions) ? data.dietaryOptions : [],
+        createdAt: data.createdAt || new Date().toISOString(),
+        updatedAt: data.updatedAt
+      };
+      
+      console.log('  ✅ Mapped restaurant:', restaurant.name, '| Cuisine:', restaurant.cuisine, '| Images:', restaurant.images.length);
       setCachedData(cacheKey, restaurant);
       return restaurant;
     }
+    
+    console.warn('⚠️ Restaurant not found:', restaurantId);
     return null;
   } catch (error) {
-    console.error('Error fetching restaurant:', error);
+    console.error('❌ Error fetching restaurant:', error);
+    if (error instanceof Error) {
+      console.error('  Error name:', error.name);
+      console.error('  Error message:', error.message);
+    }
     return null;
   }
 }
@@ -430,6 +555,28 @@ export async function createReservation(reservation: Omit<Reservation, 'id'>): P
     
     // Clear cache for this user's reservations
     cache.delete(`user_reservations_${reservation.userId}`);
+    
+    // Create a confirmation message (optional - only if messages are enabled)
+    try {
+      const { createMessage } = await import('./firebase-messages');
+      await createMessage(
+        reservation.userId,
+        reservation.restaurantId,
+        reservation.restaurantName,
+        'Reservation Confirmed',
+        `Your reservation for ${reservation.partySize} guest${reservation.partySize !== 1 ? 's' : ''} on ${reservation.date} at ${reservation.time} has been confirmed. We look forward to serving you!`,
+        'confirmation',
+        {
+          restaurantImage: reservation.restaurantImage,
+          reservationId: docRef.id,
+          priority: 'normal'
+        }
+      );
+      console.log('✅ Confirmation message created for reservation:', docRef.id);
+    } catch (msgError) {
+      // Don't fail the reservation if message creation fails
+      console.warn('⚠️ Could not create confirmation message:', msgError);
+    }
     
     return docRef.id;
   } catch (error) {
@@ -836,6 +983,7 @@ export async function isRestaurantFavorite(userId: string, restaurantId: string)
 
 /**
  * Filter restaurants by cuisine
+ * Note: restaurant-owners collection is keyed by userId
  */
 export async function fetchRestaurantsByCuisine(cuisine: string): Promise<Restaurant[]> {
   const cacheKey = `restaurants_cuisine_${cuisine}`;
@@ -843,7 +991,7 @@ export async function fetchRestaurantsByCuisine(cuisine: string): Promise<Restau
   if (cached) return cached;
 
   try {
-    const restaurantsRef = collection(db, 'restaurants');
+    const restaurantsRef = collection(db, 'restaurant-owners');
     const q = query(restaurantsRef, where('cuisine', 'array-contains', cuisine));
     const querySnapshot = await getDocs(q);
     
@@ -851,7 +999,7 @@ export async function fetchRestaurantsByCuisine(cuisine: string): Promise<Restau
     querySnapshot.forEach((doc) => {
       const data = doc.data();
       restaurants.push({ 
-        id: doc.id, 
+        id: doc.id, // This is the restaurant owner's userId
         ...data,
         cuisine: Array.isArray(data.cuisine) ? data.cuisine : [data.cuisine],
         images: Array.isArray(data.images) ? data.images : [data.images],
@@ -875,7 +1023,7 @@ export async function fetchFeaturedRestaurants(): Promise<Restaurant[]> {
   if (cached) return cached;
 
   try {
-    const restaurantsRef = collection(db, 'restaurants');
+    const restaurantsRef = collection(db, 'restaurant-owners');
     const q = query(restaurantsRef, where('featured', '==', true), limit(10));
     const querySnapshot = await getDocs(q);
     
@@ -885,8 +1033,9 @@ export async function fetchFeaturedRestaurants(): Promise<Restaurant[]> {
       restaurants.push({ 
         id: doc.id, 
         ...data,
-        cuisine: Array.isArray(data.cuisine) ? data.cuisine : [data.cuisine],
-        images: Array.isArray(data.images) ? data.images : [data.images],
+        name: data.restaurantName || data.name || 'Unknown Restaurant',
+        cuisine: data.cuisineType ? [data.cuisineType] : (Array.isArray(data.cuisine) ? data.cuisine : []),
+        images: Array.isArray(data.photos) ? data.photos : (Array.isArray(data.images) ? data.images : []),
       } as Restaurant);
     });
     
@@ -899,8 +1048,9 @@ export async function fetchFeaturedRestaurants(): Promise<Restaurant[]> {
         restaurants.push({ 
           id: doc.id, 
           ...data,
-          cuisine: Array.isArray(data.cuisine) ? data.cuisine : [data.cuisine],
-          images: Array.isArray(data.images) ? data.images : [data.images],
+          name: data.restaurantName || data.name || 'Unknown Restaurant',
+          cuisine: data.cuisineType ? [data.cuisineType] : (Array.isArray(data.cuisine) ? data.cuisine : []),
+          images: Array.isArray(data.photos) ? data.photos : (Array.isArray(data.images) ? data.images : []),
         } as Restaurant);
       });
     }

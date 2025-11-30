@@ -6,7 +6,7 @@ import { Input } from './components/ui/input';
 import { Label } from './components/ui/label';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
-import { ConsumerApp } from './components/consumer-app-complete';
+import { ConsumerApp, type ConsumerAppView } from './components/consumer-app-complete';
 import { ConsumerAppMobile } from './components/consumer-app-mobile';
 import { 
   Sparkles, 
@@ -22,7 +22,8 @@ import {
   BookOpen,
   Clock,
   UserCircle,
-  Loader2
+  Loader2,
+  MessageSquare
 } from 'lucide-react';
 import { onAuthStateChange, signInWithEmail, signUpWithEmail, signInWithGoogle, signOutUser } from './lib/firebase-auth';
 import { type UserProfile } from './lib/types';
@@ -173,12 +174,12 @@ export default function App() {
   // If user is logged in, show the Diner Portal
   if (currentUser) {
     // Map activePage to ConsumerApp view (desktop)
-    const mapPageToView = (page: string): 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile' => {
+    const mapPageToView = (page: string): ConsumerAppView => {
       if (page === 'dashboard') return 'discover';
-      return page as 'experiences' | 'reservations' | 'waitlist' | 'profile';
+      return page as ConsumerAppView;
     };
 
-    const mapViewToPage = (view: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile'): string => {
+    const mapViewToPage = (view: ConsumerAppView): string => {
       if (view === 'discover') return 'dashboard';
       return view;
     };
@@ -197,7 +198,7 @@ export default function App() {
       return tab;
     };
 
-    const handleViewChange = (view: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile') => {
+    const handleViewChange = (view: ConsumerAppView) => {
       setActivePage(mapViewToPage(view));
     };
 
@@ -464,6 +465,50 @@ export default function App() {
                   >
                     <Clock className="w-4 h-4" style={{ color: activePage === 'waitlist' ? '#FFFFFF' : '#A9B6C5' }} />
                     <span style={{ color: activePage === 'waitlist' ? '#FFFFFF' : '#A9B6C5' }}>Waitlist</span>
+                  </motion.button>
+
+                  {/* Messages */}
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    className="rounded-lg flex items-center justify-center transition-all duration-200"
+                    style={{
+                      backgroundColor: activePage === 'messages' ? '#2B3D56' : 'transparent',
+                      boxShadow: activePage === 'messages' ? '0 2px 6px rgba(0, 0, 0, 0.25)' : 'none',
+                      fontFamily: 'Inter, system-ui, sans-serif',
+                      fontWeight: 500,
+                      fontSize: '14px',
+                      color: activePage === 'messages' ? '#FFFFFF' : '#A9B6C5',
+                      flex: '1',
+                      height: '28px',
+                      paddingLeft: '12px',
+                      paddingRight: '12px',
+                      paddingTop: '6px',
+                      paddingBottom: '6px',
+                      gap: '6px',
+                      borderRadius: '8px',
+                    }}
+                    onClick={() => setActivePage('messages')}
+                    onMouseEnter={(e) => {
+                      if (activePage !== 'messages') {
+                        e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#C7D4E1';
+                        if (text) (text as HTMLElement).style.color = '#C7D4E1';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activePage !== 'messages') {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        const icon = e.currentTarget.querySelector('svg');
+                        const text = e.currentTarget.querySelector('span');
+                        if (icon) (icon as unknown as HTMLElement).style.color = '#A9B6C5';
+                        if (text) (text as HTMLElement).style.color = '#A9B6C5';
+                      }
+                    }}
+                  >
+                    <MessageSquare className="w-4 h-4" style={{ color: activePage === 'messages' ? '#FFFFFF' : '#A9B6C5' }} />
+                    <span style={{ color: activePage === 'messages' ? '#FFFFFF' : '#A9B6C5' }}>Messages</span>
                   </motion.button>
 
                   {/* Profile */}

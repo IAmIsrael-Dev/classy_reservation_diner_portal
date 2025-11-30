@@ -15,7 +15,7 @@ import { Switch } from './ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { toast } from 'sonner';
 import { getDemoData, demoUserProfile } from '../lib/demo-data';
-import { signOutUser } from '../lib/firebase-auth';
+import { signOutUser, uploadProfilePicture } from '../lib/firebase-auth';
 import { 
   fetchRestaurants, 
   fetchUserReservations, 
@@ -31,8 +31,10 @@ import {
   removeFavoriteRestaurant,
   createReservation
 } from '../lib/firebase-data';
+import { MessagesView } from './messages-view';
 import type { User as FirebaseUser } from 'firebase/auth';
 import type { UserProfile } from '../lib/types';
+import { getUserRecommendations, type AIRecommendation as FirebaseAIRecommendation } from '../lib/firebase-recommendations';
 import {
   Search,
   MapPin,
@@ -139,15 +141,6 @@ interface MockReservation {
   createdAt?: string;
 }
 
-interface AIRecommendation {
-  type: 'restaurant' | 'rebook' | 'experience' | 'time';
-  title: string;
-  description: string;
-  restaurant?: MockRestaurant;
-  action: string;
-  confidence: number;
-}
-
 // Type for hours object from Firebase
 type HoursObject = {
   [key: string]: { open: string; close: string } | 'closed';
@@ -155,6 +148,18 @@ type HoursObject = {
 
 // Type for hours - can be string or object
 type Hours = string | HoursObject | undefined;
+
+// Type for Consumer App views
+export type ConsumerAppView = 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'messages' | 'profile';
+
+// Type for Consumer App props
+export interface ConsumerAppProps {
+  activeView?: ConsumerAppView;
+  onViewChange?: (view: ConsumerAppView) => void;
+  isDemoMode?: boolean;
+  currentUser?: FirebaseUser | null;
+  userProfile?: UserProfile | null;
+}
 
 // Type for Firebase Restaurant with partial fields
 interface FirebaseRestaurantData {
@@ -490,87 +495,7 @@ const mockRestaurants: MockRestaurant[] = [
   },
 ];
 
-const mockAIRecommendations: AIRecommendation[] = [
-  {
-    type: 'rebook',
-    title: '🎂 Anniversary Coming Up!',
-    description: 'Your anniversary is in 2 weeks. We recommend Le Jardin - you had an amazing experience there last year!',
-    restaurant: mockRestaurants[4],
-    action: 'Book Le Jardin',
-    confidence: 95,
-  },
-  {
-    type: 'restaurant',
-    title: '✨ Perfect for Tonight',
-    description: 'Based on your love for Italian and the romantic ambiance, Bella Vista is ideal for your evening plans.',
-    restaurant: mockRestaurants[0],
-    action: 'View Bella Vista',
-    confidence: 92,
-  },
-  {
-    type: 'experience',
-    title: '🍷 Try Wine Pairing',
-    description: "You've never tried the wine pairing experience. Based on your preferences, you'll love it at Le Jardin.",
-    restaurant: mockRestaurants[4],
-    action: 'Explore Experiences',
-    confidence: 88,
-  },
-  {
-    type: 'time',
-    title: '⏰ Better Availability',
-    description: 'Booking at 6:30 PM instead of 7:00 PM gives you more table choices and shorter wait times.',
-    action: 'See Recommendations',
-    confidence: 85,
-  },
-];
-
 // ===== COMPONENTS =====
-
-// AI Concierge Card
-interface AIConciergeCardProps {
-  recommendation: AIRecommendation;
-  onAction: () => void;
-}
-
-const AIConciergeCard = ({ recommendation, onAction }: AIConciergeCardProps) => {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      whileHover={{ scale: 1.02 }}
-    >
-      <Card className="p-5 bg-gradient-to-br from-cyan-900/20 to-blue-900/20 border-cyan-500/30 hover:border-cyan-500/50 transition-all cursor-pointer relative overflow-hidden"
-        onClick={onAction}
-      >
-        <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-cyan-500/10 to-blue-500/10 rounded-full blur-3xl" />
-        <div className="relative">
-          <div className="flex items-start justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center">
-                <Sparkles className="w-4 h-4 text-white" />
-              </div>
-              <div>
-                <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30 mb-1">
-                  AI Recommended
-                </Badge>
-              </div>
-            </div>
-            <div className="text-right">
-              <div className="text-xs text-slate-400">Confidence</div>
-              <div className="text-sm text-cyan-400">{recommendation.confidence}%</div>
-            </div>
-          </div>
-          <h3 className="text-lg text-slate-100 mb-2">{recommendation.title}</h3>
-          <p className="text-sm text-slate-400 mb-4">{recommendation.description}</p>
-          <Button className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700">
-            {recommendation.action}
-            <ChevronRight className="w-4 h-4 ml-2" />
-          </Button>
-        </div>
-      </Card>
-    </motion.div>
-  );
-};
 
 // Experience Card (for Experiences tab)
 interface ExperienceCardProps {
@@ -709,14 +634,8 @@ export function ConsumerApp({
   onViewChange,
   isDemoMode = false,
   currentUser
-}: { 
-  activeView?: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile';
-  onViewChange?: (view: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile') => void;
-  isDemoMode?: boolean;
-  currentUser?: FirebaseUser | null;
-  userProfile?: UserProfile | null;
-} = {}) {
-  const [activeView, setActiveView] = useState<'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile'>(externalActiveView || 'discover');
+}: ConsumerAppProps = {}) {
+  const [activeView, setActiveView] = useState<ConsumerAppView>(externalActiveView || 'discover');
   const [searchQuery, setSearchQuery] = useState('');
   const [committedSearchQuery, setCommittedSearchQuery] = useState(''); // Search query committed by button click
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -737,11 +656,13 @@ export function ConsumerApp({
   const [experiences, setExperiences] = useState<MockExperience[]>([]);
   const [waitlist, setWaitlist] = useState<MockWaitlistEntry[]>([]);
   const [favoriteRestaurants, setFavoriteRestaurants] = useState<MockRestaurant[]>([]);
+  const [aiRecommendations, setAiRecommendations] = useState<FirebaseAIRecommendation[]>([]);
   const [isLoadingRestaurants, setIsLoadingRestaurants] = useState(false);
   const [isLoadingReservations, setIsLoadingReservations] = useState(false);
   const [isLoadingExperiences, setIsLoadingExperiences] = useState(false);
   const [isLoadingWaitlist, setIsLoadingWaitlist] = useState(false);
   const [isLoadingFavorites, setIsLoadingFavorites] = useState(false);
+  const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(false);
   
   // Restaurant details dialog state
   const [viewingRestaurantDetails, setViewingRestaurantDetails] = useState(false);
@@ -752,6 +673,8 @@ export function ConsumerApp({
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editedProfile, setEditedProfile] = useState<Partial<UserProfile>>({});
+  const [selectedProfilePicture, setSelectedProfilePicture] = useState<File | null>(null);
+  const [photoPreviewURL, setPhotoPreviewURL] = useState<string | null>(null);
 
   // Settings dialog states
   const [openSettingsDialog, setOpenSettingsDialog] = useState<'personal' | 'payment' | 'dining' | 'notifications' | 'privacy' | null>(null);
@@ -885,6 +808,18 @@ export function ConsumerApp({
       console.error('Error loading favorites:', error);
     } finally {
       setIsLoadingFavorites(false);
+    }
+
+    // Fetch AI recommendations
+    setIsLoadingRecommendations(true);
+    try {
+      const recommendationsData = await getUserRecommendations(currentUser.uid);
+      setAiRecommendations(recommendationsData);
+    } catch (error) {
+      console.error('Error loading AI recommendations:', error);
+      setAiRecommendations([]); // Set empty array on error
+    } finally {
+      setIsLoadingRecommendations(false);
     }
   };
 
@@ -1126,17 +1061,66 @@ export function ConsumerApp({
       setProfile({ ...profile, ...editedProfile });
       toast.success('Profile updated successfully!');
       setIsEditingProfile(false);
+      setSelectedProfilePicture(null);
+      setPhotoPreviewURL(null);
     } else if (currentUser) {
-      // Real mode: update Firebase
-      const success = await updateUserProfile(currentUser.uid, editedProfile);
-      if (success) {
-        // Reload profile data
-        const updated = await fetchUserProfile(currentUser.uid);
-        setProfile(updated);
-        toast.success('Profile updated successfully!');
-        setIsEditingProfile(false);
-      } else {
-        toast.error('Failed to update profile');
+      try {
+        const profileUpdates = { ...editedProfile };
+
+        // Remove photoURL from editedProfile if it's a base64 string (shouldn't happen now, but safety check)
+        if (profileUpdates.photoURL && profileUpdates.photoURL.startsWith('data:')) {
+          delete profileUpdates.photoURL;
+        }
+
+        // If there's a new profile picture, upload it first
+        let photoUploadFailed = false;
+        if (selectedProfilePicture) {
+          try {
+            toast.info('Uploading profile picture...');
+            const photoURL = await uploadProfilePicture(currentUser.uid, selectedProfilePicture);
+            profileUpdates.photoURL = photoURL;
+          } catch (uploadError) {
+            photoUploadFailed = true;
+            console.error('Photo upload failed, continuing with profile update:', uploadError);
+            
+            // Check if it's a storage permission error
+            if (uploadError instanceof Error && uploadError.message === 'STORAGE_PERMISSION_DENIED') {
+              toast.error('Photo upload failed: Firebase Storage permissions not configured. Profile will be saved without photo.', {
+                duration: 6000
+              });
+              console.warn('💡 TIP: Configure Firebase Storage rules to enable photo uploads.');
+              console.warn('📄 See FIREBASE_STORAGE_RULES.md for instructions.');
+            } else {
+              toast.error('Photo upload failed. Profile will be saved without photo.');
+            }
+          }
+        }
+
+        // Update profile in Firebase (even if photo upload failed)
+        const success = await updateUserProfile(currentUser.uid, profileUpdates);
+        if (success) {
+          // Reload profile data
+          const updated = await fetchUserProfile(currentUser.uid);
+          setProfile(updated);
+          
+          if (photoUploadFailed) {
+            toast.success('Profile updated (without photo)');
+          } else {
+            toast.success('Profile updated successfully!');
+          }
+          
+          setIsEditingProfile(false);
+          setSelectedProfilePicture(null);
+          setPhotoPreviewURL(null);
+        } else {
+          toast.error('Failed to update profile');
+        }
+      } catch (error) {
+        console.error('Error saving profile:', error);
+        
+        // Show specific error message
+        const errorMessage = error instanceof Error ? error.message : 'Failed to save profile';
+        toast.error(errorMessage);
       }
     }
   };
@@ -1144,6 +1128,8 @@ export function ConsumerApp({
   const handleCancelEdit = () => {
     setIsEditingProfile(false);
     setEditedProfile({});
+    setSelectedProfilePicture(null);
+    setPhotoPreviewURL(null);
   };
 
   // Sign out handler
@@ -1182,21 +1168,73 @@ export function ConsumerApp({
             {/* AI Recommendations - MOVED TO TOP */}
             <div>
               <h2 className="text-2xl text-slate-100 mb-4">AI Concierge Recommendations</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {mockAIRecommendations.map((rec, idx) => (
-                  <AIConciergeCard
-                    key={idx}
-                    recommendation={rec}
-                    onAction={() => {
-                      if (rec.type === 'experience') {
-                        setActiveView('experiences');
-                      } else if (rec.restaurant) {
-                        handleBookRestaurant(rec.restaurant);
-                      }
-                    }}
-                  />
-                ))}
-              </div>
+              {isLoadingRecommendations ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-500"></div>
+                </div>
+              ) : aiRecommendations.length === 0 ? (
+                <Card className="p-8 bg-slate-800/50 border-slate-700 text-center">
+                  <div className="w-16 h-16 rounded-full bg-gradient-to-br from-cyan-500/20 to-blue-500/20 flex items-center justify-center mx-auto mb-4">
+                    <Sparkles className="w-8 h-8 text-cyan-400" />
+                  </div>
+                  <h3 className="text-slate-200 mb-2">No Recommendations Yet</h3>
+                  <p className="text-slate-400 text-sm">
+                    Make your first reservation to start receiving personalized AI recommendations based on your dining preferences and history.
+                  </p>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {aiRecommendations.map((rec) => (
+                    <motion.div
+                      key={rec.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      whileHover={{ scale: 1.02 }}
+                    >
+                      <Card className="p-5 bg-gradient-to-br from-cyan-900/20 to-blue-900/20 border-cyan-500/30 hover:border-cyan-500/50 transition-all cursor-pointer relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-cyan-500/10 to-blue-500/10 rounded-full blur-3xl" />
+                        <div className="relative">
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center">
+                                <Sparkles className="w-4 h-4 text-white" />
+                              </div>
+                              <div>
+                                <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30 mb-1">
+                                  AI Recommended
+                                </Badge>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-xs text-slate-400">Confidence</div>
+                              <div className="text-sm text-cyan-400">{rec.confidence}%</div>
+                            </div>
+                          </div>
+                          <h3 className="text-lg text-slate-100 mb-2">{rec.title}</h3>
+                          <p className="text-sm text-slate-400 mb-4">{rec.description}</p>
+                          <Button 
+                            className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700"
+                            onClick={() => {
+                              if (rec.type === 'experience') {
+                                setActiveView('experiences');
+                              } else if (rec.restaurantId) {
+                                // Find restaurant by ID and open booking
+                                const restaurant = restaurants.find(r => r.id === rec.restaurantId);
+                                if (restaurant) {
+                                  handleBookRestaurant(restaurant);
+                                }
+                              }
+                            }}
+                          >
+                            {rec.action}
+                            <ChevronRight className="w-4 h-4 ml-2" />
+                          </Button>
+                        </div>
+                      </Card>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Search Bar with Date, Time, and Party Size - NOW BELOW AI RECOMMENDATIONS */}
@@ -1742,6 +1780,21 @@ export function ConsumerApp({
                 ))}
               </div>
             )}
+          </motion.div>
+        )}
+
+        {/* MESSAGES VIEW */}
+        {activeView === 'messages' && (
+          <motion.div
+            key="messages"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="space-y-6"
+          >
+            <MessagesView 
+              userId={currentUser?.uid || 'demo-user'} 
+              demoMode={isDemoMode}
+            />
           </motion.div>
         )}
 
@@ -2315,7 +2368,7 @@ export function ConsumerApp({
               {/* Avatar */}
               <div className="flex flex-col items-center gap-3">
                 <Avatar className="w-24 h-24">
-                  {editedProfile.photoURL && <AvatarImage src={editedProfile.photoURL} />}
+                  {(photoPreviewURL || editedProfile.photoURL) && <AvatarImage src={photoPreviewURL || editedProfile.photoURL} />}
                   <AvatarFallback className="bg-cyan-600 text-white text-2xl">
                     {profile.displayName?.substring(0, 2).toUpperCase() || 'U'}
                   </AvatarFallback>
@@ -2339,12 +2392,11 @@ export function ConsumerApp({
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) {
-                        // Convert to data URL for preview
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                          setEditedProfile({ ...editedProfile, photoURL: reader.result as string });
-                        };
-                        reader.readAsDataURL(file);
+                        // Store the file for later upload
+                        setSelectedProfilePicture(file);
+                        // Create preview URL (doesn't bloat editedProfile)
+                        const previewURL = URL.createObjectURL(file);
+                        setPhotoPreviewURL(previewURL);
                       }
                     }}
                   />

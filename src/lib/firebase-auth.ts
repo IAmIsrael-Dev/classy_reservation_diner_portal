@@ -3,15 +3,17 @@ import {
   signInWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
+  type User,
   updateProfile,
   sendPasswordResetEmail,
   GoogleAuthProvider,
   signInWithPopup,
+  type UserCredential
 } from 'firebase/auth';
-import type { User, UserCredential } from 'firebase/auth';  
 import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { auth, db } from './firebase';
-import type { UserProfile } from './types';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { auth, db, storage } from './firebase';
+import { type UserProfile } from './types';
 
 /**
  * Get error message from Firebase error
@@ -28,14 +30,27 @@ function getErrorMessage(error: unknown): string {
 
 /**
  * Check if username is available
+ * Returns true if available, false if taken
+ * If Firebase rules aren't configured, it gracefully handles the error
  */
 export async function isUsernameAvailable(username: string): Promise<boolean> {
   try {
     const usernameDoc = await getDoc(doc(db, 'usernames', username.toLowerCase()));
     return !usernameDoc.exists();
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Error checking username:', error);
-    return false;
+    
+    // Check if this is a permission-denied error
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes('permission-denied') || errorMessage.includes('Missing or insufficient permissions')) {
+      console.warn('⚠️ Firebase rules not configured. Skipping username uniqueness check.');
+      console.warn('📋 To enable username validation, apply rules from FIREBASE_RULES.md');
+      // Return true to allow signup to proceed (username uniqueness won't be enforced)
+      return true;
+    }
+    
+    // For other errors, throw
+    throw new Error('Unable to check username availability: ' + errorMessage);
   }
 }
 
@@ -87,11 +102,17 @@ export async function signUpWithEmail(
     // Save user profile
     await setDoc(doc(db, 'users', user.uid), userProfile);
     
-    // Reserve username
-    await setDoc(doc(db, 'usernames', username.toLowerCase()), {
-      uid: user.uid,
-      createdAt: new Date().toISOString()
-    });
+    // Try to reserve username (may fail if rules not configured)
+    try {
+      await setDoc(doc(db, 'usernames', username.toLowerCase()), {
+        uid: user.uid,
+        createdAt: new Date().toISOString()
+      });
+    } catch {
+      console.warn('⚠️ Could not reserve username (Firebase rules may not be configured)');
+      console.warn('📋 Username uniqueness will not be enforced until rules are applied');
+      // Don't fail signup if username reservation fails
+    }
 
     return { user, profile: userProfile };
   } catch (error) {
@@ -171,11 +192,16 @@ export async function signInWithGoogle(): Promise<{ user: User; profile: UserPro
       
       await setDoc(doc(db, 'users', user.uid), profile);
       
-      // Reserve username
-      await setDoc(doc(db, 'usernames', username), {
-        uid: user.uid,
-        createdAt: new Date().toISOString()
-      });
+      // Try to reserve username (may fail if rules not configured)
+      try {
+        await setDoc(doc(db, 'usernames', username), {
+          uid: user.uid,
+          createdAt: new Date().toISOString()
+        });
+      } catch {
+        console.warn('⚠️ Could not reserve username (Firebase rules may not be configured)');
+        // Don't fail Google sign-in if username reservation fails
+      }
     }
 
     return { user, profile };
@@ -252,4 +278,72 @@ export async function resetPassword(email: string): Promise<void> {
  */
 export function onAuthStateChange(callback: (user: User | null) => void): () => void {
   return onAuthStateChanged(auth, callback);
+}
+
+/**
+ * Upload profile picture to Firebase Storage and return the download URL
+ * 
+ * IMPORTANT: Firebase Storage security rules must be configured to allow this.
+ * Add these rules in Firebase Console > Storage > Rules:
+ * 
+ * rules_version = '2';
+ * service firebase.storage {
+ *   match /b/{bucket}/o {
+ *     match /profile-pictures/{userId}/{fileName} {
+ *       allow read;
+ *       allow write: if request.auth != null && request.auth.uid == userId;
+ *     }
+ *   }
+ * }
+ * 
+ * @throws {StoragePermissionError} When Storage rules are not configured
+ */
+export async function uploadProfilePicture(
+  uid: string,
+  file: File
+): Promise<string> {
+  try {
+    // Create a reference to the storage location
+    // Using folder structure: profile-pictures/{userId}/profile.{ext}
+    const fileExtension = file.name.split('.').pop() || 'jpg';
+    const storageRef = ref(storage, `profile-pictures/${uid}/profile.${fileExtension}`);
+    
+    // Upload the file
+    await uploadBytes(storageRef, file);
+    
+    // Get the download URL
+    const downloadURL = await getDownloadURL(storageRef);
+    
+    return downloadURL;
+  } catch (error) {
+    console.error('Error uploading profile picture:', error);
+    
+    // Check if it's a permission error
+    if (error instanceof Error && (error.message.includes('unauthorized') || error.message.includes('permission-denied'))) {
+      console.error('⚠️ FIREBASE STORAGE PERMISSION ERROR ⚠️');
+      console.error('Your Firebase Storage security rules need to be updated.');
+      console.error('Go to: Firebase Console > Storage > Rules');
+      console.error('Add the following rules:');
+      console.error(`
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /profile-pictures/{userId}/{fileName} {
+      allow read;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}
+      `);
+      console.error('📄 See FIREBASE_STORAGE_RULES.md for detailed setup instructions');
+      
+      // Throw specific error type that can be caught
+      const storageError = new Error('STORAGE_PERMISSION_DENIED');
+      storageError.name = 'StoragePermissionError';
+      throw storageError;
+    }
+    
+    const message = getErrorMessage(error);
+    throw new Error(message || 'Failed to upload profile picture');
+  }
 }

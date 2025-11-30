@@ -125,3 +125,19 @@ export interface WaitlistEntry {
   createdAt: string;
   updatedAt?: string;
 }
+
+// Message Interface
+export interface Message {
+  id: string;
+  userId: string;
+  restaurantId: string;
+  restaurantName: string;
+  restaurantImage?: string;
+  subject: string;
+  message: string;
+  timestamp: string;
+  read: boolean;
+  reservationId?: string;
+  type: 'confirmation' | 'reminder' | 'update' | 'cancellation' | 'general' | 'special_offer';
+  priority?: 'low' | 'normal' | 'high';
+}

@@ -1,4 +1,4 @@
-import type { UserProfile, Reservation, Restaurant, Experience, WaitlistEntry } from './types';
+import type { UserProfile, Reservation, Restaurant, Experience, WaitlistEntry, Message } from './types';
 
 /**
  * Demo user profile for testing
@@ -353,6 +353,122 @@ export const demoWaitlistEntries: WaitlistEntry[] = [
 ];
 
 /**
+ * Demo messages for testing
+ */
+export const demoMessages: Message[] = [
+  {
+    id: 'msg-1',
+    userId: 'demo-user-123',
+    restaurantId: 'rest-1',
+    restaurantName: 'The Italian Kitchen',
+    restaurantImage: 'https://images.unsplash.com/photo-1514933651103-005eec06c04b?w=400',
+    subject: 'Reservation Confirmed',
+    message: 'Your reservation for 2 guests on November 15, 2024 at 7:00 PM has been confirmed. We look forward to serving you! Please arrive 10 minutes early.',
+    timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
+    read: false,
+    reservationId: 'res-1',
+    type: 'confirmation',
+    priority: 'normal'
+  },
+  {
+    id: 'msg-2',
+    userId: 'demo-user-123',
+    restaurantId: 'rest-1',
+    restaurantName: 'The Italian Kitchen',
+    restaurantImage: 'https://images.unsplash.com/photo-1514933651103-005eec06c04b?w=400',
+    subject: 'Special Wine Pairing Available',
+    message: 'We have a special wine pairing menu available for your upcoming reservation. Ask your server for details!',
+    timestamp: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(), // 4 hours ago
+    read: false,
+    reservationId: 'res-1',
+    type: 'special_offer',
+    priority: 'low'
+  },
+  {
+    id: 'msg-3',
+    userId: 'demo-user-123',
+    restaurantId: 'rest-3',
+    restaurantName: 'Sakura Sushi Bar',
+    restaurantImage: 'https://images.unsplash.com/photo-1579584425555-c3ce17fd4351?w=400',
+    subject: 'Reservation Reminder',
+    message: 'This is a friendly reminder about your reservation for 4 guests on November 20, 2024 at 8:30 PM. We can\'t wait to see you!',
+    timestamp: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(), // 1 day ago
+    read: true,
+    reservationId: 'res-2',
+    type: 'reminder',
+    priority: 'normal'
+  },
+  {
+    id: 'msg-4',
+    userId: 'demo-user-123',
+    restaurantId: 'rest-3',
+    restaurantName: 'Sakura Sushi Bar',
+    restaurantImage: 'https://images.unsplash.com/photo-1579584425555-c3ce17fd4351?w=400',
+    subject: 'New Omakase Menu Available',
+    message: 'Chef Tanaka has created a special seasonal omakase menu featuring rare bluefin tuna and uni from Hokkaido. Available for a limited time!',
+    timestamp: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), // 3 days ago
+    read: true,
+    type: 'special_offer',
+    priority: 'normal'
+  },
+  {
+    id: 'msg-5',
+    userId: 'demo-user-123',
+    restaurantId: 'rest-5',
+    restaurantName: 'Le Petit Bistro',
+    restaurantImage: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=400',
+    subject: 'Pending Reservation Update',
+    message: 'Your reservation request for November 25, 2024 at 6:30 PM is currently pending. We will confirm within 24 hours. Thank you for your patience!',
+    timestamp: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(), // 6 hours ago
+    read: false,
+    reservationId: 'res-3',
+    type: 'update',
+    priority: 'high'
+  },
+  {
+    id: 'msg-6',
+    userId: 'demo-user-123',
+    restaurantId: 'rest-5',
+    restaurantName: 'Le Petit Bistro',
+    restaurantImage: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=400',
+    subject: 'Weekend Brunch Special',
+    message: 'Join us for our new weekend brunch featuring traditional French pastries, crêpes, and bottomless mimosas. Available Saturday and Sunday 10 AM - 2 PM.',
+    timestamp: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), // 5 days ago
+    read: true,
+    type: 'general',
+    priority: 'low'
+  },
+  {
+    id: 'msg-7',
+    userId: 'demo-user-123',
+    restaurantId: 'rest-2',
+    restaurantName: 'Steakhouse Prime',
+    restaurantImage: 'https://images.unsplash.com/photo-1544025162-d76694265947?w=400',
+    subject: 'Thank You for Dining With Us',
+    message: 'Thank you for choosing Steakhouse Prime! We hope you enjoyed your meal on October 28, 2024. We\'d love to hear your feedback!',
+    timestamp: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days ago
+    read: true,
+    reservationId: 'res-4',
+    type: 'general',
+    priority: 'low'
+  },
+  {
+    id: 'msg-8',
+    userId: 'demo-user-123',
+    restaurantId: 'rest-4',
+    restaurantName: 'Spice Route',
+    restaurantImage: 'https://images.unsplash.com/photo-1552566626-52f8b828add9?w=400',
+    subject: 'Thank You & 10% Off Your Next Visit',
+    message: 'Thank you for dining with us! As a token of our appreciation, enjoy 10% off your next reservation. Use code: SPICE10. Valid for 30 days.',
+    timestamp: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(), // 15 days ago
+    read: true,
+    reservationId: 'res-5',
+    type: 'special_offer',
+    priority: 'normal'
+  }
+];
+
+/**
  * Get all demo data for a user
  */
 export function getDemoData() {
@@ -361,6 +477,7 @@ export function getDemoData() {
     reservations: demoReservations,
     restaurants: demoRestaurants,
     experiences: demoExperiences,
-    waitlist: demoWaitlistEntries
+    waitlist: demoWaitlistEntries,
+    messages: demoMessages
   };
 }

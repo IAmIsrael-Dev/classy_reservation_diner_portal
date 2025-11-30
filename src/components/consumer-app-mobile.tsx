@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Switch } from './ui/switch';
 import { toast } from 'sonner';
 import { getDemoData, demoUserProfile } from '../lib/demo-data';
-import { signOutUser } from '../lib/firebase-auth';
+import { signOutUser, uploadProfilePicture } from '../lib/firebase-auth';
 import { 
   fetchRestaurants, 
   fetchUserReservations,
@@ -21,6 +21,8 @@ import {
   updateDiningPreferences,
   updatePaymentMethods
 } from '../lib/firebase-data';
+import { getUserRecommendations, type AIRecommendation as FirebaseAIRecommendation } from '../lib/firebase-recommendations';
+import { MessagesView } from './messages-view';
 import type { User as FirebaseUser } from 'firebase/auth';
 import type { UserProfile } from '../lib/types';
 import {
@@ -52,6 +54,7 @@ import {
   LogOut,
   Plus,
   Clock,
+  Sparkles,
 } from 'lucide-react';
 
 // Local mock restaurant interface for demo UI
@@ -298,7 +301,9 @@ const transformToMockRestaurant = (firebaseRestaurant: FirebaseRestaurantData): 
     reviews: firebaseRestaurant.reviewCount || 0,
     priceLevel: firebaseRestaurant.priceRange || 2,
     distance: firebaseRestaurant.distance || 'N/A',
-    image: firebaseRestaurant.imageUrl || firebaseRestaurant.image || '',
+    image: Array.isArray(firebaseRestaurant.images) && firebaseRestaurant.images.length > 0
+      ? firebaseRestaurant.images[0]
+      : 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
     description: firebaseRestaurant.description || '',
     address: firebaseRestaurant.address || 'Address not available',
     hours: hoursString,
@@ -338,12 +343,16 @@ export function ConsumerAppMobile({
   const [reservations, setReservations] = useState<MockReservation[]>([]);
   const [isLoadingRestaurants, setIsLoadingRestaurants] = useState(false);
   const [isLoadingReservations, setIsLoadingReservations] = useState(false);
+  const [aiRecommendations, setAiRecommendations] = useState<FirebaseAIRecommendation[]>([]);
+  const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(false);
 
   // Profile states
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editedProfile, setEditedProfile] = useState<Partial<UserProfile>>({});
+  const [selectedProfilePicture, setSelectedProfilePicture] = useState<File | null>(null);
+  const [photoPreviewURL, setPhotoPreviewURL] = useState<string | null>(null);
 
   // Settings dialog states
   const [openSettingsDialog, setOpenSettingsDialog] = useState<'personal' | 'payment' | 'dining' | 'notifications' | 'privacy' | null>(null);
@@ -437,6 +446,18 @@ export function ConsumerAppMobile({
       console.error('Error loading profile:', error);
     } finally {
       setIsLoadingProfile(false);
+    }
+
+    // Fetch AI recommendations
+    setIsLoadingRecommendations(true);
+    try {
+      const recommendations = await getUserRecommendations(currentUser.uid, 5);
+      setAiRecommendations(recommendations);
+    } catch (error) {
+      console.error('Error loading AI recommendations:', error);
+      setAiRecommendations([]); // Set empty array on error
+    } finally {
+      setIsLoadingRecommendations(false);
     }
   };
 
@@ -560,17 +581,66 @@ export function ConsumerAppMobile({
       setProfile({ ...profile, ...editedProfile });
       toast.success('Profile updated successfully!');
       setIsEditingProfile(false);
+      setSelectedProfilePicture(null);
+      setPhotoPreviewURL(null);
     } else if (currentUser) {
-      // Real mode: update Firebase
-      const success = await updateUserProfile(currentUser.uid, editedProfile);
-      if (success) {
-        // Reload profile data
-        const updated = await fetchUserProfile(currentUser.uid);
-        setProfile(updated);
-        toast.success('Profile updated successfully!');
-        setIsEditingProfile(false);
-      } else {
-        toast.error('Failed to update profile');
+      try {
+        const profileUpdates = { ...editedProfile };
+
+        // Remove photoURL from editedProfile if it's a base64 string (shouldn't happen now, but safety check)
+        if (profileUpdates.photoURL && profileUpdates.photoURL.startsWith('data:')) {
+          delete profileUpdates.photoURL;
+        }
+
+        // If there's a new profile picture, upload it first
+        let photoUploadFailed = false;
+        if (selectedProfilePicture) {
+          try {
+            toast.info('Uploading profile picture...');
+            const photoURL = await uploadProfilePicture(currentUser.uid, selectedProfilePicture);
+            profileUpdates.photoURL = photoURL;
+          } catch (uploadError) {
+            photoUploadFailed = true;
+            console.error('Photo upload failed, continuing with profile update:', uploadError);
+            
+            // Check if it's a storage permission error
+            if (uploadError instanceof Error && uploadError.message === 'STORAGE_PERMISSION_DENIED') {
+              toast.error('Photo upload failed: Firebase Storage permissions not configured. Profile will be saved without photo.', {
+                duration: 6000
+              });
+              console.warn('💡 TIP: Configure Firebase Storage rules to enable photo uploads.');
+              console.warn('📄 See FIREBASE_STORAGE_RULES.md for instructions.');
+            } else {
+              toast.error('Photo upload failed. Profile will be saved without photo.');
+            }
+          }
+        }
+
+        // Update profile in Firebase (even if photo upload failed)
+        const success = await updateUserProfile(currentUser.uid, profileUpdates);
+        if (success) {
+          // Reload profile data
+          const updated = await fetchUserProfile(currentUser.uid);
+          setProfile(updated);
+          
+          if (photoUploadFailed) {
+            toast.success('Profile updated (without photo)');
+          } else {
+            toast.success('Profile updated successfully!');
+          }
+          
+          setIsEditingProfile(false);
+          setSelectedProfilePicture(null);
+          setPhotoPreviewURL(null);
+        } else {
+          toast.error('Failed to update profile');
+        }
+      } catch (error) {
+        console.error('Error saving profile:', error);
+        
+        // Show specific error message
+        const errorMessage = error instanceof Error ? error.message : 'Failed to save profile';
+        toast.error(errorMessage);
       }
     }
   };
@@ -578,6 +648,8 @@ export function ConsumerAppMobile({
   const handleCancelEdit = () => {
     setIsEditingProfile(false);
     setEditedProfile({});
+    setSelectedProfilePicture(null);
+    setPhotoPreviewURL(null);
   };
 
   // Filter restaurants based on committed search (only when button is clicked)
@@ -676,6 +748,77 @@ export function ConsumerAppMobile({
                 </Button>
               </div>
             </div>
+
+            {/* AI Concierge Recommendations */}
+            {!isDemoMode && (
+              <div>
+                <div className="flex items-center gap-2 mb-4">
+                  <Sparkles className="w-5 h-5 text-cyan-400" />
+                  <h3 className="text-lg text-slate-100">AI Concierge</h3>
+                </div>
+
+                {isLoadingRecommendations ? (
+                  <Card className="p-5 bg-gradient-to-br from-cyan-900/20 to-blue-900/20 border-cyan-500/30">
+                    <p className="text-center text-slate-400">Loading recommendations...</p>
+                  </Card>
+                ) : aiRecommendations.length === 0 ? (
+                  <Card className="p-6 bg-gradient-to-br from-cyan-900/20 to-blue-900/20 border-cyan-500/30 text-center relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-cyan-500/10 to-blue-500/10 rounded-full blur-3xl" />
+                    <div className="relative">
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center mx-auto mb-3">
+                        <Sparkles className="w-6 h-6 text-white" />
+                      </div>
+                      <h4 className="text-slate-200 mb-2">No Recommendations Yet</h4>
+                      <p className="text-sm text-slate-400">
+                        Make a few reservations and our AI will start personalizing suggestions for you
+                      </p>
+                    </div>
+                  </Card>
+                ) : (
+                  <div className="space-y-3">
+                    {aiRecommendations.map((rec) => (
+                      <motion.div
+                        key={rec.id}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        whileTap={{ scale: 0.98 }}
+                      >
+                        <Card className="p-4 bg-gradient-to-br from-cyan-900/20 to-blue-900/20 border-cyan-500/30 active:border-cyan-500/50 relative overflow-hidden">
+                          <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-cyan-500/10 to-blue-500/10 rounded-full blur-2xl" />
+                          <div className="relative">
+                            <div className="flex items-start justify-between mb-2">
+                              <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30 text-xs">
+                                AI Recommended
+                              </Badge>
+                              <span className="text-xs text-cyan-400">{rec.confidence}%</span>
+                            </div>
+                            <h4 className="text-slate-100 mb-1">{rec.title}</h4>
+                            <p className="text-sm text-slate-400 mb-3 line-clamp-2">{rec.description}</p>
+                            <Button 
+                              size="sm" 
+                              className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700"
+                              onClick={() => {
+                                // Handle action based on recommendation type
+                                if (rec.type === 'restaurant' && rec.restaurantId) {
+                                  const restaurant = restaurants.find(r => r.id === rec.restaurantId);
+                                  if (restaurant) {
+                                    setSelectedRestaurant(restaurant);
+                                  }
+                                }
+                                toast.success(`Opening ${rec.action}...`);
+                              }}
+                            >
+                              {rec.action}
+                              <ChevronRight className="w-4 h-4 ml-1" />
+                            </Button>
+                          </div>
+                        </Card>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Featured Restaurants */}
             <div data-section="restaurants-mobile">
@@ -961,6 +1104,15 @@ export function ConsumerAppMobile({
                 <p className="text-slate-400">No profile data available</p>
               </Card>
             )}
+
+            {/* Messages Section */}
+            <div>
+              <h3 className="text-lg text-slate-100 mb-4">Messages</h3>
+              <MessagesView 
+                userId={currentUser?.uid || 'demo-user'} 
+                demoMode={isDemoMode}
+              />
+            </div>
 
             {/* Account Settings */}
             <div className="space-y-3">
@@ -1333,7 +1485,7 @@ export function ConsumerAppMobile({
                 {/* Avatar */}
                 <div className="flex flex-col items-center gap-3">
                   <Avatar className="w-24 h-24">
-                    {editedProfile.photoURL && <AvatarImage src={editedProfile.photoURL} />}
+                    {(photoPreviewURL || editedProfile.photoURL) && <AvatarImage src={photoPreviewURL || editedProfile.photoURL} />}
                     <AvatarFallback className="bg-gradient-to-br from-blue-500 to-cyan-500 text-white text-2xl">
                       {profile.displayName?.substring(0, 2).toUpperCase() || 'U'}
                     </AvatarFallback>
@@ -1356,12 +1508,11 @@ export function ConsumerAppMobile({
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) {
-                        // Convert to data URL for preview
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                          setEditedProfile({ ...editedProfile, photoURL: reader.result as string });
-                        };
-                        reader.readAsDataURL(file);
+                        // Store the file for later upload
+                        setSelectedProfilePicture(file);
+                        // Create preview URL (doesn't bloat editedProfile)
+                        const previewURL = URL.createObjectURL(file);
+                        setPhotoPreviewURL(previewURL);
                       }
                     }}
                   />
