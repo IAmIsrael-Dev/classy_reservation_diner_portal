@@ -27,6 +27,32 @@ import type {
 } from './types';
 
 // ============================================
+// ERROR HANDLING UTILITIES
+// ============================================
+
+/**
+ * Check if error is a Firebase offline/network error
+ */
+function isOfflineError(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code: string }).code;
+    return code === 'unavailable' || code === 'failed-precondition';
+  }
+  return false;
+}
+
+/**
+ * Handle Firebase errors with user-friendly messages
+ */
+function handleFirebaseError(error: unknown, operation: string): void {
+  console.error(`Error in ${operation}:`, error);
+  
+  if (isOfflineError(error)) {
+    console.warn(`⚠️ ${operation}: Operating in offline mode. Data will sync when connection is restored.`);
+  }
+}
+
+// ============================================
 // CACHE MANAGEMENT
 // ============================================
 
@@ -79,7 +105,7 @@ export async function fetchUserProfile(uid: string): Promise<UserProfile | null>
     }
     return null;
   } catch (error) {
-    console.error('Error fetching user profile:', error);
+    handleFirebaseError(error, 'fetchUserProfile');
     return null;
   }
 }
@@ -104,7 +130,7 @@ export async function updateUserProfile(
     
     return true;
   } catch (error) {
-    console.error('Error updating user profile:', error);
+    handleFirebaseError(error, 'updateUserProfile');
     return false;
   }
 }
@@ -128,7 +154,7 @@ export async function updateNotificationSettings(
     
     return true;
   } catch (error) {
-    console.error('Error updating notification settings:', error);
+    handleFirebaseError(error, 'updateNotificationSettings');
     return false;
   }
 }
@@ -152,7 +178,7 @@ export async function updateDiningPreferences(
     
     return true;
   } catch (error) {
-    console.error('Error updating dining preferences:', error);
+    handleFirebaseError(error, 'updateDiningPreferences');
     return false;
   }
 }
@@ -176,7 +202,7 @@ export async function updatePaymentMethods(
     
     return true;
   } catch (error) {
-    console.error('Error updating payment methods:', error);
+    handleFirebaseError(error, 'updatePaymentMethods');
     return false;
   }
 }
@@ -264,11 +290,7 @@ export async function fetchRestaurantsPaginated(
       hasMore: querySnapshot.docs.length > pageSize
     };
   } catch (error) {
-    console.error('❌ Error fetching restaurants:', error);
-    if (error instanceof Error) {
-      console.error('  Error message:', error.message);
-      console.error('  Error stack:', error.stack);
-    }
+    handleFirebaseError(error, 'fetchRestaurantsPaginated');
     return { data: [], lastDoc: null, hasMore: false };
   }
 }
@@ -341,12 +363,7 @@ export async function fetchRestaurants(): Promise<Restaurant[]> {
     setCachedData(cacheKey, restaurants);
     return restaurants;
   } catch (error) {
-    console.error('❌ Error fetching restaurants:', error);
-    if (error instanceof Error) {
-      console.error('  Error name:', error.name);
-      console.error('  Error message:', error.message);
-      console.error('  Error stack:', error.stack);
-    }
+    handleFirebaseError(error, 'fetchRestaurants');
     return [];
   }
 }
@@ -410,11 +427,7 @@ export async function fetchRestaurantById(restaurantId: string): Promise<Restaur
     console.warn('⚠️ Restaurant not found:', restaurantId);
     return null;
   } catch (error) {
-    console.error('❌ Error fetching restaurant:', error);
-    if (error instanceof Error) {
-      console.error('  Error name:', error.name);
-      console.error('  Error message:', error.message);
-    }
+    handleFirebaseError(error, 'fetchRestaurantById');
     return null;
   }
 }
@@ -471,7 +484,7 @@ export async function fetchUserReservations(userId: string): Promise<Reservation
     setCachedData(cacheKey, reservations);
     return reservations;
   } catch (error) {
-    console.error('Error fetching reservations:', error);
+    handleFirebaseError(error, 'fetchUserReservations');
     return [];
   }
 }
@@ -534,7 +547,7 @@ export async function fetchUserReservationsPaginated(
       hasMore
     };
   } catch (error) {
-    console.error('Error fetching reservations:', error);
+    handleFirebaseError(error, 'fetchUserReservationsPaginated');
     return { data: [], lastDoc: null, hasMore: false };
   }
 }
@@ -546,8 +559,14 @@ export async function createReservation(reservation: Omit<Reservation, 'id'>): P
   try {
     const reservationsRef = collection(db, 'reservations');
     const now = new Date().toISOString();
+    
+    // Filter out undefined values to avoid Firebase errors
+    const cleanedReservation = Object.fromEntries(
+      Object.entries(reservation).filter(([, value]) => value !== undefined)
+    );
+    
     const docRef = await addDoc(reservationsRef, {
-      ...reservation,
+      ...cleanedReservation,
       date: reservation.date,
       createdAt: now,
       updatedAt: now,
@@ -580,7 +599,7 @@ export async function createReservation(reservation: Omit<Reservation, 'id'>): P
     
     return docRef.id;
   } catch (error) {
-    console.error('Error creating reservation:', error);
+    handleFirebaseError(error, 'createReservation');
     return null;
   }
 }
@@ -588,19 +607,31 @@ export async function createReservation(reservation: Omit<Reservation, 'id'>): P
 /**
  * Update a reservation in Firestore
  */
-export async function updateReservation(reservationId: string, updates: Partial<Reservation>): Promise<boolean> {
+export async function updateReservation(reservationId: string, updates: Partial<Reservation>, userId?: string): Promise<boolean> {
   try {
     const reservationRef = doc(db, 'reservations', reservationId);
-    await updateDoc(reservationRef, { ...updates, updatedAt: new Date().toISOString() });
     
-    // Clear relevant cache
-    if (updates.userId) {
-      cache.delete(`user_reservations_${updates.userId}`);
+    // Prepare updates with timestamp
+    const updateData = { 
+      ...updates, 
+      updatedAt: new Date().toISOString() 
+    };
+    
+    console.log('Updating reservation:', reservationId, 'with data:', updateData);
+    await updateDoc(reservationRef, updateData);
+    console.log('Reservation updated successfully');
+    
+    // Clear relevant cache - use provided userId or userId from updates
+    const cacheUserId = userId || updates.userId;
+    if (cacheUserId) {
+      cache.delete(`user_reservations_${cacheUserId}`);
+      console.log('Cache cleared for user:', cacheUserId);
     }
     
     return true;
   } catch (error) {
     console.error('Error updating reservation:', error);
+    handleFirebaseError(error, 'updateReservation');
     return false;
   }
 }
@@ -621,7 +652,7 @@ export async function cancelReservation(reservationId: string, userId: string): 
     
     return true;
   } catch (error) {
-    console.error('Error cancelling reservation:', error);
+    handleFirebaseError(error, 'cancelReservation');
     return false;
   }
 }
@@ -670,7 +701,7 @@ export async function fetchUserExperiences(userId: string): Promise<Experience[]
     setCachedData(cacheKey, experiences);
     return experiences;
   } catch (error) {
-    console.error('Error fetching experiences:', error);
+    handleFirebaseError(error, 'fetchUserExperiences');
     return [];
   }
 }
@@ -711,7 +742,7 @@ export async function fetchAllExperiences(): Promise<Experience[]> {
     setCachedData(cacheKey, experiences);
     return experiences;
   } catch (error) {
-    console.error('Error fetching experiences:', error);
+    handleFirebaseError(error, 'fetchAllExperiences');
     return [];
   }
 }
@@ -732,7 +763,7 @@ export async function saveExperience(experience: Omit<Experience, 'id'>): Promis
     
     return docRef.id;
   } catch (error) {
-    console.error('Error saving experience:', error);
+    handleFirebaseError(error, 'saveExperience');
     return null;
   }
 }
@@ -751,7 +782,7 @@ export async function removeExperience(experienceId: string, userId: string): Pr
     
     return true;
   } catch (error) {
-    console.error('Error removing experience:', error);
+    handleFirebaseError(error, 'removeExperience');
     return false;
   }
 }
@@ -805,7 +836,7 @@ export async function fetchUserWaitlist(userId: string): Promise<WaitlistEntry[]
     setCachedData(cacheKey, waitlist);
     return waitlist;
   } catch (error) {
-    console.error('Error fetching waitlist:', error);
+    handleFirebaseError(error, 'fetchUserWaitlist');
     return [];
   }
 }
@@ -826,7 +857,7 @@ export async function joinWaitlist(waitlistEntry: Omit<WaitlistEntry, 'id'>): Pr
     
     return docRef.id;
   } catch (error) {
-    console.error('Error joining waitlist:', error);
+    handleFirebaseError(error, 'joinWaitlist');
     return null;
   }
 }
@@ -847,7 +878,7 @@ export async function leaveWaitlist(waitlistId: string, userId: string): Promise
     
     return true;
   } catch (error) {
-    console.error('Error leaving waitlist:', error);
+    handleFirebaseError(error, 'leaveWaitlist');
     return false;
   }
 }
@@ -882,7 +913,7 @@ export async function searchRestaurants(searchQuery: string): Promise<Restaurant
       );
     });
   } catch (error) {
-    console.error('Error searching restaurants:', error);
+    handleFirebaseError(error, 'searchRestaurants');
     return [];
   }
 }
@@ -906,7 +937,7 @@ export async function fetchFavoriteRestaurants(userId: string): Promise<Restaura
     
     return allRestaurants.filter(restaurant => favoriteIds.includes(restaurant.id));
   } catch (error) {
-    console.error('Error fetching favorite restaurants:', error);
+    handleFirebaseError(error, 'fetchFavoriteRestaurants');
     return [];
   }
 }
@@ -936,7 +967,7 @@ export async function addFavoriteRestaurant(userId: string, restaurantId: string
     
     return true;
   } catch (error) {
-    console.error('Error adding favorite restaurant:', error);
+    handleFirebaseError(error, 'addFavoriteRestaurant');
     return false;
   }
 }
@@ -962,7 +993,7 @@ export async function removeFavoriteRestaurant(userId: string, restaurantId: str
     
     return true;
   } catch (error) {
-    console.error('Error removing favorite restaurant:', error);
+    handleFirebaseError(error, 'removeFavoriteRestaurant');
     return false;
   }
 }
@@ -976,7 +1007,7 @@ export async function isRestaurantFavorite(userId: string, restaurantId: string)
     const currentFavorites = profile?.preferences?.favoriteRestaurants || [];
     return currentFavorites.includes(restaurantId);
   } catch (error) {
-    console.error('Error checking favorite status:', error);
+    handleFirebaseError(error, 'isRestaurantFavorite');
     return false;
   }
 }
@@ -1009,7 +1040,7 @@ export async function fetchRestaurantsByCuisine(cuisine: string): Promise<Restau
     setCachedData(cacheKey, restaurants);
     return restaurants;
   } catch (error) {
-    console.error('Error fetching restaurants by cuisine:', error);
+    handleFirebaseError(error, 'fetchRestaurantsByCuisine');
     return [];
   }
 }
@@ -1058,7 +1089,7 @@ export async function fetchFeaturedRestaurants(): Promise<Restaurant[]> {
     setCachedData(cacheKey, restaurants);
     return restaurants;
   } catch (error) {
-    console.error('Error fetching featured restaurants:', error);
+    handleFirebaseError(error, 'fetchFeaturedRestaurants');
     return [];
   }
 }

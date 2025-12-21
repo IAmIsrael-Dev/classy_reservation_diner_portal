@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { type Message } from '../lib/types';
+import type { Message } from '../lib/types';
 import { 
   getUserMessages, 
   markMessageAsRead, 

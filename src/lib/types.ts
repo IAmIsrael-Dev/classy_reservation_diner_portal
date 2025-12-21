@@ -141,3 +141,38 @@ export interface Message {
   type: 'confirmation' | 'reminder' | 'update' | 'cancellation' | 'general' | 'special_offer';
   priority?: 'low' | 'normal' | 'high';
 }
+
+// Conversation Types for Real-time Messaging
+export interface ConversationParticipants {
+  userId: string;
+  restaurantId: string;
+  adminIds: string[];
+}
+
+export type ParticipantRole = 'USER' | 'RESTAURANT' | 'ADMIN';
+
+export interface ConversationMessage {
+  id: string;
+  senderId: string;
+  senderRole: ParticipantRole;
+  text: string;
+  createdAt: string;
+  isRead: boolean;
+}
+
+export interface Conversation {
+  id: string;
+  type: 'USER_RESTAURANT';
+  reservationId: string;
+  participants: ConversationParticipants;
+  participantRoles: ParticipantRole[];
+  lastMessage: string;
+  lastMessageAt: string;
+  createdAt: string;
+  isActive: boolean;
+  // Enriched fields (not from Firebase, added by client)
+  restaurantName?: string;
+  restaurantImage?: string;
+  reservationDate?: string;
+  reservationTime?: string;
+}

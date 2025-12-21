@@ -185,16 +185,18 @@ export default function App() {
     };
 
     // Map activePage to ConsumerAppMobile tab (mobile)
-    const mapPageToTab = (page: string): 'home' | 'reservations' | 'saved' | 'profile' => {
+    const mapPageToTab = (page: string): 'home' | 'reservations' | 'saved' | 'messages' | 'profile' => {
       if (page === 'dashboard') return 'home';
       if (page === 'experiences') return 'saved'; // Experiences maps to saved on mobile
       if (page === 'waitlist') return 'reservations'; // Waitlist maps to reservations on mobile
+      if (page === 'messages') return 'messages';
       return page as 'reservations' | 'profile';
     };
 
-    const mapTabToPage = (tab: 'home' | 'reservations' | 'saved' | 'profile'): string => {
+    const mapTabToPage = (tab: 'home' | 'reservations' | 'saved' | 'messages' | 'profile'): string => {
       if (tab === 'home') return 'dashboard';
       if (tab === 'saved') return 'experiences';
+      if (tab === 'messages') return 'messages';
       return tab;
     };
 
@@ -202,7 +204,7 @@ export default function App() {
       setActivePage(mapViewToPage(view));
     };
 
-    const handleTabChange = (tab: 'home' | 'reservations' | 'saved' | 'profile') => {
+    const handleTabChange = (tab: 'home' | 'reservations' | 'saved' | 'messages' | 'profile') => {
       setActivePage(mapTabToPage(tab));
     };
 

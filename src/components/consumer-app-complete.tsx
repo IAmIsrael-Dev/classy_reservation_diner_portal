@@ -13,6 +13,7 @@ import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Progress } from './ui/progress';
 import { Switch } from './ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from './ui/alert-dialog';
 import { toast } from 'sonner';
 import { getDemoData, demoUserProfile } from '../lib/demo-data';
 import { signOutUser, uploadProfilePicture } from '../lib/firebase-auth';
@@ -29,11 +30,15 @@ import {
   fetchFavoriteRestaurants,
   addFavoriteRestaurant,
   removeFavoriteRestaurant,
-  createReservation
+  createReservation,
+  updateReservation,
+  cancelReservation
 } from '../lib/firebase-data';
-import { MessagesView } from './messages-view';
+import { ConversationsList } from './conversations-list';
+import { ChatPopup } from './chat-popup';
+import { getOrCreateConversation } from '../lib/firebase-conversations';
 import type { User as FirebaseUser } from 'firebase/auth';
-import type { UserProfile } from '../lib/types';
+import type { UserProfile, Conversation } from '../lib/types';
 import { getUserRecommendations, type AIRecommendation as FirebaseAIRecommendation } from '../lib/firebase-recommendations';
 import {
   Search,
@@ -59,7 +64,6 @@ import {
   Gift,
   Timer,
   Plus,
-  Repeat,
   Save,
   X,
   Trash2,
@@ -67,6 +71,7 @@ import {
   Mail,
   Smartphone,
   Shield,
+  MessageSquare,
 } from 'lucide-react';
 
 // ===== TYPES =====
@@ -678,6 +683,11 @@ export function ConsumerApp({
 
   // Settings dialog states
   const [openSettingsDialog, setOpenSettingsDialog] = useState<'personal' | 'payment' | 'dining' | 'notifications' | 'privacy' | null>(null);
+
+  // Conversation states
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
+  const [isChatPopupOpen, setIsChatPopupOpen] = useState(false);
+  const [reservationToCancel, setReservationToCancel] = useState<string | null>(null);
   
   // Settings data states
   const [notificationSettings, setNotificationSettings] = useState({
@@ -880,7 +890,7 @@ export function ConsumerApp({
   }, [externalActiveView]);
 
   // Handle view change
-  const handleViewChange = (view: 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'profile') => {
+  const handleViewChange = (view: ConsumerAppView) => {
     setActiveView(view);
     if (onViewChange) {
       onViewChange(view);
@@ -969,7 +979,7 @@ export function ConsumerApp({
         time: reservationTime,
         partySize: parseInt(partySize),
         status: 'confirmed' as const,
-        specialRequests: reservationExperience || undefined,
+        ...(reservationExperience && { specialRequests: reservationExperience }),
         createdAt: new Date().toISOString(),
       };
 
@@ -1014,21 +1024,120 @@ export function ConsumerApp({
   };
 
   const handleModifyReservation = (reservation: MockReservation) => {
-    const restaurant = mockRestaurants.find(r => r.id === reservation.restaurantId);
+    const restaurant = (restaurants.length > 0 ? restaurants : mockRestaurants).find(r => r.id === reservation.restaurantId);
     if (restaurant) {
       setModifyingReservation(reservation);
       setSelectedRestaurant(restaurant);
       setReservationTime(reservation.time);
       setPartySize(reservation.partySize.toString());
+      // Parse and set the date from the reservation
+      try {
+        const reservationDate = new Date(reservation.date);
+        setSelectedDate(reservationDate);
+      } catch {
+        setSelectedDate(new Date()); // Fallback to today if date parsing fails
+      }
       setBookingStep('time');
     }
   };
 
-  const handleSaveModification = () => {
-    toast.success('Reservation updated successfully!');
+  const handleMessageRestaurant = async (reservation: MockReservation) => {
+    if (isDemoMode) {
+      toast.error('Messaging is not available in demo mode. Please sign in to message restaurants.');
+      return;
+    }
+
+    if (!currentUser) {
+      toast.error('Please sign in to message restaurants');
+      return;
+    }
+
+    try {
+      // Get or create conversation for this reservation
+      const conversationId = await getOrCreateConversation(
+        currentUser.uid,
+        reservation.restaurantId,
+        reservation.id
+      );
+
+      // Fetch the conversation details
+      const conversations = await import('../lib/firebase-conversations').then(m => m.getUserConversations(currentUser.uid));
+      const conversation = conversations.find(c => c.id === conversationId);
+
+      if (conversation) {
+        setSelectedConversation(conversation);
+        setIsChatPopupOpen(true); // Open chat popup with the conversation
+        toast.success('Opening conversation with ' + reservation.restaurantName);
+      } else {
+        toast.error('Failed to open conversation');
+      }
+    } catch (error) {
+      console.error('Error starting conversation:', error);
+      toast.error('Failed to start conversation');
+    }
+  };
+
+
+
+  const handleSaveModification = async () => {
+    if (!modifyingReservation) return;
+
+    if (isDemoMode) {
+      // Demo mode - update local state
+      setReservations(reservations.map(r => 
+        r.id === modifyingReservation.id 
+          ? { ...r, date: selectedDate.toLocaleDateString(), time: reservationTime, partySize: Number(partySize) }
+          : r
+      ));
+      toast.success('Reservation updated successfully!');
+    } else if (currentUser) {
+      // Firebase mode - update reservation in Firebase
+      const formattedDate = selectedDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+      
+      const success = await updateReservation(
+        modifyingReservation.id, 
+        {
+          date: formattedDate,
+          time: reservationTime,
+          partySize: Number(partySize)
+        },
+        currentUser.uid // Pass userId to ensure cache is cleared
+      );
+
+      if (success) {
+        toast.success('Reservation updated successfully!');
+        // Refresh reservations list
+        const updatedReservations = await fetchUserReservations(currentUser.uid);
+        setReservations(updatedReservations as unknown as MockReservation[]);
+      } else {
+        toast.error('Failed to update reservation');
+      }
+    }
+
     setModifyingReservation(null);
     setSelectedRestaurant(null);
     setReservationTime('');
+  };
+
+  const handleCancelReservation = async (reservationId: string) => {
+    if (isDemoMode) {
+      setReservations(reservations.filter(r => r.id !== reservationId));
+      toast.success('Reservation cancelled');
+      setReservationToCancel(null);
+    } else if (currentUser) {
+      // Firebase mode - cancel reservation
+      const success = await cancelReservation(reservationId, currentUser.uid);
+      
+      if (success) {
+        toast.success('Reservation cancelled');
+        // Refresh reservations list
+        const updatedReservations = await fetchUserReservations(currentUser.uid);
+        setReservations(updatedReservations as unknown as MockReservation[]);
+      } else {
+        toast.error('Failed to cancel reservation');
+      }
+      setReservationToCancel(null);
+    }
   };
 
   const handleJoinWaitlist = (restaurant: MockRestaurant) => {
@@ -1640,15 +1749,10 @@ export function ConsumerApp({
                             variant="outline"
                             size="sm"
                             className="border-slate-700"
-                            onClick={() => {
-                              const restaurant = mockRestaurants.find(r => r.id === res.restaurantId);
-                              if (restaurant) {
-                                handleBookRestaurant(restaurant);
-                              }
-                            }}
+                            onClick={() => handleMessageRestaurant(res)}
                           >
-                            <Repeat className="w-4 h-4 mr-2" />
-                            Rebook
+                            <MessageSquare className="w-4 h-4 mr-2" />
+                            Message
                           </Button>
                           <Button 
                             variant="outline" 
@@ -1658,6 +1762,15 @@ export function ConsumerApp({
                           >
                             <Edit className="w-4 h-4 mr-2" />
                             Modify
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                            onClick={() => setReservationToCancel(res.id)}
+                          >
+                            <X className="w-4 h-4 mr-2" />
+                            Cancel
                           </Button>
                         </div>
                       </div>
@@ -1713,19 +1826,6 @@ export function ConsumerApp({
                               </span>
                             </div>
                           </div>
-
-                          <Button
-                            className="bg-cyan-600 hover:bg-cyan-700"
-                            onClick={() => {
-                              const restaurant = mockRestaurants.find(r => r.id === res.restaurantId);
-                              if (restaurant) {
-                                handleBookRestaurant(restaurant);
-                              }
-                            }}
-                          >
-                            <Repeat className="w-4 h-4 mr-2" />
-                            Rebook
-                          </Button>
                         </div>
                       </div>
                     </div>
@@ -1791,8 +1891,14 @@ export function ConsumerApp({
             animate={{ opacity: 1 }}
             className="space-y-6"
           >
-            <MessagesView 
+            <h2 className="text-2xl text-slate-100">Messages</h2>
+            
+            <ConversationsList 
               userId={currentUser?.uid || 'demo-user'} 
+              onSelectConversation={(conversation) => {
+                setSelectedConversation(conversation);
+                setIsChatPopupOpen(true);
+              }}
               demoMode={isDemoMode}
             />
           </motion.div>
@@ -2254,6 +2360,33 @@ export function ConsumerApp({
                 <div className="border-t border-slate-700 pt-6">
                   <h4 className="text-lg text-slate-100 mb-4">Make a Reservation</h4>
                 </div>
+
+                {/* Select Date (for modify only) */}
+                {modifyingReservation && (
+                  <div>
+                    <Label className="text-slate-300 mb-2 block">Select Date</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className="w-full justify-start text-left bg-slate-700 border-slate-600 text-slate-100 hover:bg-slate-600"
+                        >
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {selectedDate ? selectedDate.toLocaleDateString() : 'Pick a date'}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0 bg-slate-800 border-slate-700" align="start">
+                        <Calendar
+                          mode="single"
+                          selected={selectedDate}
+                          onSelect={(date) => date && setSelectedDate(date)}
+                          disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
+                          className="rounded-md"
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                )}
 
                 {/* Select Time */}
                 <div>
@@ -2786,6 +2919,43 @@ export function ConsumerApp({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Chat Popup */}
+      {selectedConversation && (
+        <ChatPopup
+          isOpen={isChatPopupOpen}
+          onClose={() => {
+            setIsChatPopupOpen(false);
+            setSelectedConversation(null);
+          }}
+          conversation={selectedConversation}
+          userId={currentUser?.uid || 'demo-user'}
+          demoMode={isDemoMode}
+        />
+      )}
+
+      {/* Cancel Reservation Confirmation Dialog */}
+      <AlertDialog open={reservationToCancel !== null} onOpenChange={(open) => !open && setReservationToCancel(null)}>
+        <AlertDialogContent className="bg-slate-800 border-slate-700">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-slate-100">Cancel Reservation?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-400">
+              Are you sure you want to cancel this reservation? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="bg-slate-700 border-slate-600 text-slate-100 hover:bg-slate-600">
+              Keep Reservation
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={() => reservationToCancel && handleCancelReservation(reservationToCancel)}
+            >
+              Cancel Reservation
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

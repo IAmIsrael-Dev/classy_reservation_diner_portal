@@ -7,6 +7,7 @@ import { Badge } from './ui/badge';
 import { Label } from './ui/label';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from './ui/alert-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Switch } from './ui/switch';
 import { toast } from 'sonner';
@@ -19,12 +20,17 @@ import {
   updateUserProfile,
   updateNotificationSettings,
   updateDiningPreferences,
-  updatePaymentMethods
+  updatePaymentMethods,
+  createReservation,
+  updateReservation,
+  cancelReservation
 } from '../lib/firebase-data';
 import { getUserRecommendations, type AIRecommendation as FirebaseAIRecommendation } from '../lib/firebase-recommendations';
-import { MessagesView } from './messages-view';
+import { ConversationsList } from './conversations-list';
+import { ConversationChat } from './conversation-chat';
+import { getOrCreateConversation } from '../lib/firebase-conversations';
 import type { User as FirebaseUser } from 'firebase/auth';
-import type { UserProfile } from '../lib/types';
+import type { UserProfile, Conversation } from '../lib/types';
 import {
   Search,
   MapPin,
@@ -55,6 +61,8 @@ import {
   Plus,
   Clock,
   Sparkles,
+  MessageSquare,
+  Edit,
 } from 'lucide-react';
 
 // Local mock restaurant interface for demo UI
@@ -324,19 +332,21 @@ export function ConsumerAppMobile({
   isDemoMode = false,
   currentUser
 }: { 
-  activeTab?: 'home' | 'reservations' | 'saved' | 'profile';
-  onTabChange?: (tab: 'home' | 'reservations' | 'saved' | 'profile') => void;
+  activeTab?: 'home' | 'reservations' | 'saved' | 'messages' | 'profile';
+  onTabChange?: (tab: 'home' | 'reservations' | 'saved' | 'messages' | 'profile') => void;
   isDemoMode?: boolean;
   currentUser?: FirebaseUser | null;
   userProfile?: UserProfile | null;
 } = {}) {
-  const [activeTab, setActiveTab] = useState<'home' | 'reservations' | 'saved' | 'profile'>(externalActiveTab || 'home');
+  const [activeTab, setActiveTab] = useState<'home' | 'reservations' | 'saved' | 'messages' | 'profile'>(externalActiveTab || 'home');
   const [searchQuery, setSearchQuery] = useState('');
   const [committedSearchQuery, setCommittedSearchQuery] = useState(''); // Search query committed by button click
   const [partySize, setPartySize] = useState(2);
   const [selectedRestaurant, setSelectedRestaurant] = useState<MockRestaurant | null>(null);
   const [selectedTime, setSelectedTime] = useState('');
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [savedRestaurants, setSavedRestaurants] = useState<string[]>([]);
+  const [modifyingReservation, setModifyingReservation] = useState<MockReservation | null>(null);
   
   // Data states
   const [restaurants, setRestaurants] = useState<MockRestaurant[]>(mockRestaurants);
@@ -356,6 +366,11 @@ export function ConsumerAppMobile({
 
   // Settings dialog states
   const [openSettingsDialog, setOpenSettingsDialog] = useState<'personal' | 'payment' | 'dining' | 'notifications' | 'privacy' | null>(null);
+
+  // Conversation states
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
+  const [isChatViewOpen, setIsChatViewOpen] = useState(false);
+  const [reservationToCancel, setReservationToCancel] = useState<string | null>(null);
   
   // Settings data states
   const [notificationSettings, setNotificationSettings] = useState({
@@ -518,34 +533,183 @@ export function ConsumerAppMobile({
   }, [externalActiveTab]);
 
   // Handle tab change
-  const handleTabChange = (tab: 'home' | 'reservations' | 'saved' | 'profile') => {
+  const handleTabChange = (tab: 'home' | 'reservations' | 'saved' | 'messages' | 'profile') => {
     setActiveTab(tab);
+    // Reset chat view when leaving messages tab
+    if (tab !== 'messages') {
+      setIsChatViewOpen(false);
+      setSelectedConversation(null);
+    }
     if (onTabChange) {
       onTabChange(tab);
     }
   };
 
-  const handleBooking = () => {
+  const handleMessageRestaurant = async (reservation: MockReservation) => {
+    if (isDemoMode) {
+      toast.error('Messaging is not available in demo mode. Please sign in to message restaurants.');
+      return;
+    }
+
+    if (!currentUser) {
+      toast.error('Please sign in to message restaurants');
+      return;
+    }
+
+    try {
+      // Get or create conversation for this reservation
+      const conversationId = await getOrCreateConversation(
+        currentUser.uid,
+        reservation.restaurantId,
+        reservation.id
+      );
+
+      // Fetch the conversation details
+      const conversations = await import('../lib/firebase-conversations').then(m => m.getUserConversations(currentUser.uid));
+      const conversation = conversations.find(c => c.id === conversationId);
+
+      if (conversation) {
+        setSelectedConversation(conversation);
+        setIsChatViewOpen(true); // Open chat view with the conversation
+        setActiveTab('messages'); // Navigate to messages tab
+        toast.success('Opening conversation with ' + reservation.restaurantName);
+      } else {
+        toast.error('Failed to open conversation');
+      }
+    } catch (error) {
+      console.error('Error starting conversation:', error);
+      toast.error('Failed to start conversation');
+    }
+  };
+
+  const handleModifyReservation = (reservation: MockReservation) => {
+    const restaurant = restaurants.find(r => r.id === reservation.restaurantId);
+    if (restaurant) {
+      setModifyingReservation(reservation);
+      setSelectedRestaurant(restaurant);
+      setSelectedTime(reservation.time);
+      setPartySize(reservation.partySize);
+      // Parse and set the date from the reservation
+      try {
+        const reservationDate = new Date(reservation.date);
+        setSelectedDate(reservationDate);
+      } catch {
+        setSelectedDate(new Date()); // Fallback to today if date parsing fails
+      }
+    }
+  };
+
+  const handleCancelReservation = async (reservationId: string) => {
+    if (isDemoMode) {
+      setReservations(reservations.filter(r => r.id !== reservationId));
+      toast.success('Reservation cancelled');
+      setReservationToCancel(null);
+    } else if (currentUser) {
+      // Firebase mode - cancel reservation
+      const success = await cancelReservation(reservationId, currentUser.uid);
+      
+      if (success) {
+        toast.success('Reservation cancelled');
+        // Refresh reservations list
+        const updatedReservations = await fetchUserReservations(currentUser.uid);
+        setReservations(updatedReservations as unknown as MockReservation[]);
+      } else {
+        toast.error('Failed to cancel reservation');
+      }
+      setReservationToCancel(null);
+    }
+  };
+
+  const handleSaveModification = async () => {
+    if (!modifyingReservation) return;
+
+    if (isDemoMode) {
+      setReservations(reservations.map(r => 
+        r.id === modifyingReservation.id 
+          ? { ...r, date: selectedDate.toLocaleDateString(), time: selectedTime, partySize: partySize }
+          : r
+      ));
+      toast.success('Reservation updated successfully!');
+    } else if (currentUser) {
+      // Firebase mode - update reservation in Firebase
+      const formattedDate = selectedDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+      
+      const success = await updateReservation(
+        modifyingReservation.id, 
+        {
+          date: formattedDate,
+          time: selectedTime,
+          partySize: partySize
+        },
+        currentUser.uid // Pass userId to ensure cache is cleared
+      );
+
+      if (success) {
+        toast.success('Reservation updated successfully!');
+        // Refresh reservations list
+        const updatedReservations = await fetchUserReservations(currentUser.uid);
+        setReservations(updatedReservations as unknown as MockReservation[]);
+      } else {
+        toast.error('Failed to update reservation');
+      }
+    }
+
+    setModifyingReservation(null);
+    setSelectedRestaurant(null);
+    setSelectedTime('');
+  };
+
+  const handleBooking = async () => {
     if (!selectedRestaurant || !selectedTime) {
       toast.error('Please select a time');
       return;
     }
 
-    const newReservation: MockReservation = {
-      id: `res-${Date.now()}`,
-      userId: currentUser?.uid || 'demo-user',
-      restaurantId: selectedRestaurant.id,
-      restaurantName: selectedRestaurant.name,
-      restaurantImage: selectedRestaurant.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
-      date: new Date().toISOString().split('T')[0],
-      time: selectedTime,
-      partySize,
-      status: 'confirmed',
-      confirmationCode: `${selectedRestaurant.name.substring(0, 2).toUpperCase()}${Math.floor(Math.random() * 9000 + 1000)}`,
-    };
+    // Create reservation in Firebase
+    if (!isDemoMode && currentUser) {
+      const reservationData = {
+        userId: currentUser.uid,
+        restaurantId: selectedRestaurant.id,
+        restaurantName: selectedRestaurant.name,
+        restaurantImage: selectedRestaurant.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
+        date: new Date().toISOString(),
+        time: selectedTime,
+        partySize: partySize,
+        status: 'confirmed' as const,
+        createdAt: new Date().toISOString(),
+      };
 
-    setReservations([newReservation, ...reservations]);
-    toast.success(`Reservation confirmed!`);
+      const reservationId = await createReservation(reservationData);
+      
+      if (reservationId) {
+        toast.success('Reservation confirmed!');
+        
+        // Refresh reservations list
+        const reservationsData = await fetchUserReservations(currentUser.uid);
+        setReservations(reservationsData as unknown as MockReservation[]);
+      } else {
+        toast.error('Failed to create reservation');
+        return;
+      }
+    } else {
+      // Demo mode - create local reservation
+      const newReservation: MockReservation = {
+        id: `res-${Date.now()}`,
+        userId: currentUser?.uid || 'demo-user',
+        restaurantId: selectedRestaurant.id,
+        restaurantName: selectedRestaurant.name,
+        restaurantImage: selectedRestaurant.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
+        date: new Date().toISOString().split('T')[0],
+        time: selectedTime,
+        partySize,
+        status: 'confirmed',
+        confirmationCode: `${selectedRestaurant.name.substring(0, 2).toUpperCase()}${Math.floor(Math.random() * 9000 + 1000)}`,
+      };
+
+      setReservations([newReservation, ...reservations]);
+      toast.success('Reservation confirmed! (Demo Mode)');
+    }
+
     setSelectedRestaurant(null);
     setSelectedTime('');
     handleTabChange('reservations');
@@ -969,6 +1133,38 @@ export function ConsumerAppMobile({
                           Confirmation: #{reservation.confirmationCode}
                         </div>
                       )}
+
+                      <div className="mt-3 flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1 border-slate-700"
+                          onClick={() => handleModifyReservation(reservation)}
+                        >
+                          <Edit className="w-4 h-4 mr-1" />
+                          Modify
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1 border-slate-700"
+                          onClick={() => handleMessageRestaurant(reservation)}
+                        >
+                          <MessageSquare className="w-4 h-4 mr-1" />
+                          Message
+                        </Button>
+                      </div>
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1 border-red-500/30 text-red-400 hover:bg-red-500/10"
+                          onClick={() => setReservationToCancel(reservation.id)}
+                        >
+                          <X className="w-4 h-4 mr-1" />
+                          Cancel Reservation
+                        </Button>
+                      </div>
                     </Card>
                   ))}
                 </div>
@@ -1038,6 +1234,79 @@ export function ConsumerAppMobile({
           </motion.div>
         )}
 
+        {activeTab === 'messages' && (
+          <motion.div
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="space-y-6"
+          >
+            {!isChatViewOpen ? (
+              <>
+                <h2 className="text-2xl text-slate-100">Messages</h2>
+                <ConversationsList
+                  userId={currentUser?.uid || 'demo-user'}
+                  demoMode={isDemoMode}
+                  onSelectConversation={(conversation) => {
+                    setSelectedConversation(conversation);
+                    setIsChatViewOpen(true);
+                  }}
+                />
+              </>
+            ) : selectedConversation ? (
+              <div className="fixed inset-0 bg-slate-900 z-[60] flex flex-col">
+                {/* Chat Header */}
+                <div className="flex items-center gap-3 p-4 border-b border-slate-700 bg-slate-800">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      setIsChatViewOpen(false);
+                      setSelectedConversation(null);
+                    }}
+                    className="text-slate-400 hover:text-slate-200"
+                  >
+                    <X className="w-6 h-6" />
+                  </Button>
+                  {selectedConversation.restaurantImage && (
+                    <img
+                      src={selectedConversation.restaurantImage}
+                      alt={selectedConversation.restaurantName}
+                      className="w-10 h-10 rounded-lg object-cover"
+                    />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-slate-100 truncate">
+                      {selectedConversation.restaurantName}
+                    </h3>
+                    {selectedConversation.reservationDate && selectedConversation.reservationTime && (
+                      <p className="text-xs text-slate-400 truncate">
+                        {new Date(selectedConversation.reservationDate).toLocaleDateString('en-US', { 
+                          month: 'short', 
+                          day: 'numeric',
+                          year: 'numeric'
+                        })} at {selectedConversation.reservationTime}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Chat Content */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <div className="flex-1 flex flex-col p-4 overflow-hidden">
+                    <ConversationChat
+                      conversation={selectedConversation}
+                      userId={currentUser?.uid || 'demo-user'}
+                      onBack={() => setIsChatViewOpen(false)}
+                      demoMode={isDemoMode}
+                      hideHeader={true}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </motion.div>
+        )}
+
         {activeTab === 'profile' && (
           <motion.div
             initial={{ opacity: 0, x: -20 }}
@@ -1104,15 +1373,6 @@ export function ConsumerAppMobile({
                 <p className="text-slate-400">No profile data available</p>
               </Card>
             )}
-
-            {/* Messages Section */}
-            <div>
-              <h3 className="text-lg text-slate-100 mb-4">Messages</h3>
-              <MessagesView 
-                userId={currentUser?.uid || 'demo-user'} 
-                demoMode={isDemoMode}
-              />
-            </div>
 
             {/* Account Settings */}
             <div className="space-y-3">
@@ -1243,8 +1503,9 @@ export function ConsumerAppMobile({
       </div>
 
       {/* Bottom Navigation */}
-      <div className="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 px-2 py-2 z-50">
-        <div className="flex items-center justify-around">
+      {!isChatViewOpen && (
+        <div className="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 px-2 py-2 z-50">
+          <div className="flex items-center justify-around">
           <Button
             variant="ghost"
             className={`flex-col h-14 ${
@@ -1278,6 +1539,16 @@ export function ConsumerAppMobile({
           <Button
             variant="ghost"
             className={`flex-col h-14 ${
+              activeTab === 'messages' ? 'text-blue-400' : 'text-slate-400'
+            }`}
+            onClick={() => handleTabChange('messages')}
+          >
+            <MessageSquare className="w-6 h-6 mb-1" />
+            <span className="text-xs">Messages</span>
+          </Button>
+          <Button
+            variant="ghost"
+            className={`flex-col h-14 ${
               activeTab === 'profile' ? 'text-blue-400' : 'text-slate-400'
             }`}
             onClick={() => handleTabChange('profile')}
@@ -1287,6 +1558,7 @@ export function ConsumerAppMobile({
           </Button>
         </div>
       </div>
+      )}
 
       {/* Booking Modal */}
       <AnimatePresence>
@@ -1308,7 +1580,10 @@ export function ConsumerAppMobile({
                 size="icon"
                 variant="secondary"
                 className="absolute top-4 left-4 bg-slate-900/80 backdrop-blur-sm"
-                onClick={() => setSelectedRestaurant(null)}
+                onClick={() => {
+                  setSelectedRestaurant(null);
+                  setModifyingReservation(null);
+                }}
               >
                 <X className="w-5 h-5" />
               </Button>
@@ -1331,6 +1606,9 @@ export function ConsumerAppMobile({
             <div className="px-4 py-6 pb-24">
               {/* Restaurant Info */}
               <div className="mb-6">
+                <div className="text-sm text-blue-400 mb-2">
+                  {modifyingReservation ? 'Modify Reservation' : 'Book a Table'}
+                </div>
                 <h2 className="text-2xl text-slate-100 mb-2">{selectedRestaurant.name}</h2>
                 <div className="flex items-center gap-3 mb-3 text-sm text-slate-400">
                   <div className="flex items-center gap-1">
@@ -1421,6 +1699,20 @@ export function ConsumerAppMobile({
                 </select>
               </div>
 
+              {/* Date Selection (for modify only) */}
+              {modifyingReservation && (
+                <div className="mb-6">
+                  <h3 className="text-lg text-slate-100 mb-3">Select Date</h3>
+                  <input
+                    type="date"
+                    value={selectedDate.toISOString().split('T')[0]}
+                    onChange={(e) => setSelectedDate(new Date(e.target.value))}
+                    min={new Date().toISOString().split('T')[0]}
+                    className="w-full h-12 px-4 bg-slate-800 border border-slate-700 rounded-md text-slate-100"
+                  />
+                </div>
+              )}
+
               {/* Time Selection */}
               <div className="mb-6">
                 <h3 className="text-lg text-slate-100 mb-3">Select Time</h3>
@@ -1447,11 +1739,11 @@ export function ConsumerAppMobile({
             <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900 border-t border-slate-700">
               <Button
                 className="w-full h-14 bg-blue-600 hover:bg-blue-700 text-lg"
-                onClick={handleBooking}
+                onClick={modifyingReservation ? handleSaveModification : handleBooking}
                 disabled={!selectedTime}
               >
                 <Check className="w-5 h-5 mr-2" />
-                Confirm Reservation
+                {modifyingReservation ? 'Save Changes' : 'Confirm Reservation'}
               </Button>
             </div>
           </motion.div>
@@ -1879,6 +2171,29 @@ export function ConsumerAppMobile({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Cancel Reservation Confirmation Dialog */}
+      <AlertDialog open={reservationToCancel !== null} onOpenChange={(open) => !open && setReservationToCancel(null)}>
+        <AlertDialogContent className="bg-slate-800 border-slate-700">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-slate-100">Cancel Reservation?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-400">
+              Are you sure you want to cancel this reservation? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="bg-slate-700 border-slate-600 text-slate-100 hover:bg-slate-600">
+              Keep Reservation
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={() => reservationToCancel && handleCancelReservation(reservationToCancel)}
+            >
+              Cancel Reservation
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
