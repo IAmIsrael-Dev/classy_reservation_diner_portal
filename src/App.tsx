@@ -17,8 +17,7 @@ import {
   LogOut,
   Crown,
   User,
-  LayoutGrid,
-  UtensilsCrossed,
+  Utensils,
   BookOpen,
   Clock,
   UserCircle,
@@ -293,7 +292,7 @@ export default function App() {
               >
                 {/* Navigation Items - Centered & Evenly Spaced */}
                 <nav className="flex items-center w-full h-full px-4" style={{ justifyContent: 'space-evenly' }}>
-                  {/* Dashboard */}
+                  {/* Discover */}
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     className="rounded-lg flex items-center justify-center transition-all duration-200"
@@ -333,8 +332,8 @@ export default function App() {
                       }
                     }}
                   >
-                    <LayoutGrid className="w-4 h-4" style={{ color: activePage === 'dashboard' ? '#FFFFFF' : '#A9B6C5' }} />
-                    <span style={{ color: activePage === 'dashboard' ? '#FFFFFF' : '#A9B6C5' }}>Dashboard</span>
+                    <Utensils className="w-4 h-4" style={{ color: activePage === 'dashboard' ? '#FFFFFF' : '#A9B6C5' }} />
+                    <span style={{ color: activePage === 'dashboard' ? '#FFFFFF' : '#A9B6C5' }}>Discover</span>
                   </motion.button>
 
                   {/* Experiences */}
@@ -377,7 +376,7 @@ export default function App() {
                       }
                     }}
                   >
-                    <UtensilsCrossed className="w-4 h-4" style={{ color: activePage === 'experiences' ? '#FFFFFF' : '#A9B6C5' }} />
+                    <Sparkles className="w-4 h-4" style={{ color: activePage === 'experiences' ? '#FFFFFF' : '#A9B6C5' }} />
                     <span style={{ color: activePage === 'experiences' ? '#FFFFFF' : '#A9B6C5' }}>Experiences</span>
                   </motion.button>
 

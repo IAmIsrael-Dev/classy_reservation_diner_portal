@@ -5,6 +5,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { Label } from './ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from './ui/alert-dialog';
@@ -46,7 +47,6 @@ import {
   X,
   Phone,
   Mail,
-  Filter,
   Edit2,
   Save,
   ChevronRight,
@@ -98,7 +98,14 @@ interface MockReservation {
   time: string;
   partySize: number;
   status: 'confirmed' | 'pending' | 'cancelled' | 'completed' | 'no-show';
+  type: 'table' | 'experience'; // Distinguishes table reservations from experience bookings
+  experienceId?: string; // Reference to Experience if type is 'experience'
+  experienceTitle?: string; // Cached experience title for quick display
+  tableId?: string; // Reference to table if type is 'table'
   confirmationCode?: string;
+  experience?: string; // Legacy field for backwards compatibility
+  pointsEarned?: number;
+  specialRequests?: string;
   createdAt?: string;
 }
 
@@ -347,6 +354,9 @@ export function ConsumerAppMobile({
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [savedRestaurants, setSavedRestaurants] = useState<string[]>([]);
   const [modifyingReservation, setModifyingReservation] = useState<MockReservation | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_bookingType] = useState<'table' | 'experience'>('table'); // Reserved for future dual booking implementation
+  const [showAllRestaurants, setShowAllRestaurants] = useState(false); // For All Restaurants modal
   
   // Data states
   const [restaurants, setRestaurants] = useState<MockRestaurant[]>(mockRestaurants);
@@ -672,11 +682,12 @@ export function ConsumerAppMobile({
         restaurantId: selectedRestaurant.id,
         restaurantName: selectedRestaurant.name,
         restaurantImage: selectedRestaurant.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
-        date: new Date().toISOString(),
+        date: selectedDate.toISOString(),
         time: selectedTime,
         partySize: partySize,
         status: 'confirmed' as const,
         createdAt: new Date().toISOString(),
+        type: 'table' as const,
       };
 
       const reservationId = await createReservation(reservationData);
@@ -699,11 +710,12 @@ export function ConsumerAppMobile({
         restaurantId: selectedRestaurant.id,
         restaurantName: selectedRestaurant.name,
         restaurantImage: selectedRestaurant.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
-        date: new Date().toISOString().split('T')[0],
+        date: selectedDate.toISOString().split('T')[0],
         time: selectedTime,
         partySize,
         status: 'confirmed',
         confirmationCode: `${selectedRestaurant.name.substring(0, 2).toUpperCase()}${Math.floor(Math.random() * 9000 + 1000)}`,
+        type: 'table',
       };
 
       setReservations([newReservation, ...reservations]);
@@ -845,72 +857,13 @@ export function ConsumerAppMobile({
             animate={{ opacity: 1, x: 0 }}
             className="space-y-6"
           >
-            {/* Search Section */}
+            {/* Page Title */}
             <div>
-              <h2 className="text-2xl text-slate-100 mb-4">
-                Find Your Next{' '}
-                <span className="text-blue-400">Table</span>
+              <h2 className="text-2xl text-slate-100">
+                Discover{' '}
+                <span className="text-blue-400">Restaurants</span>
               </h2>
-
-              <div className="space-y-3">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
-                  <Input
-                    placeholder="Search restaurants..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-10 bg-slate-800 border-slate-700 text-slate-100 h-12"
-                  />
-                </div>
-
-                <div className="flex gap-3">
-                  <select
-                    value={partySize}
-                    onChange={(e) => setPartySize(Number(e.target.value))}
-                    className="flex-1 h-12 px-4 bg-slate-800 border border-slate-700 rounded-md text-slate-100"
-                  >
-                    {[1, 2, 3, 4, 5, 6, 7, 8].map((size) => (
-                      <option key={size} value={size}>
-                        {size} {size === 1 ? 'Guest' : 'Guests'}
-                      </option>
-                    ))}
-                  </select>
-                  <Button
-                    variant="outline"
-                    className="px-4 bg-slate-800 border-slate-700 text-slate-100"
-                  >
-                    <Calendar className="w-5 h-5" />
-                  </Button>
-                </div>
-
-                {/* Search Button */}
-                <Button 
-                  className="group w-full h-14 bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:from-blue-700 hover:via-blue-600 hover:to-cyan-600 text-white shadow-xl hover:shadow-2xl hover:shadow-blue-500/50 rounded-xl transition-all duration-300 active:scale-95 border border-blue-400/20"
-                  onClick={() => {
-                    // Commit the search query to trigger filtering
-                    setCommittedSearchQuery(searchQuery);
-                    
-                    // Scroll to restaurant listings
-                    const restaurantSection = document.querySelector('[data-section="restaurants-mobile"]');
-                    if (restaurantSection) {
-                      restaurantSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    }
-                    // Show toast with search criteria
-                    const searchSummary = [
-                      searchQuery && `"${searchQuery}"`,
-                      `${partySize} ${partySize === 1 ? 'guest' : 'guests'}`
-                    ].filter(Boolean).join(' • ');
-                    
-                    toast.success('Searching for tables...', {
-                      description: searchSummary || 'Finding nearby restaurants',
-                      duration: 2000
-                    });
-                  }}
-                >
-                  <Search className="w-5 h-5 mr-2 group-hover:rotate-90 transition-transform duration-300" />
-                  <span className="tracking-wide">Find Tables</span>
-                </Button>
-              </div>
+              <p className="text-slate-400 mt-1">Browse and book tables at the best dining spots</p>
             </div>
 
             {/* AI Concierge Recommendations */}
@@ -967,6 +920,7 @@ export function ConsumerAppMobile({
                                   const restaurant = restaurants.find(r => r.id === rec.restaurantId);
                                   if (restaurant) {
                                     setSelectedRestaurant(restaurant);
+                                    setSelectedDate(new Date()); // Reset to today for new bookings
                                   }
                                 }
                                 toast.success(`Opening ${rec.action}...`);
@@ -988,9 +942,14 @@ export function ConsumerAppMobile({
             <div data-section="restaurants-mobile">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg text-slate-100">Nearby Restaurants</h3>
-                <Button variant="ghost" size="sm" className="text-blue-400">
-                  <Filter className="w-4 h-4 mr-1" />
-                  Filter
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="text-cyan-400 hover:text-cyan-300"
+                  onClick={() => setShowAllRestaurants(true)}
+                >
+                  See All
+                  <ChevronRight className="w-4 h-4 ml-1" />
                 </Button>
               </div>
 
@@ -998,23 +957,24 @@ export function ConsumerAppMobile({
                 <div className="text-center py-12">
                   <p className="text-slate-400">Loading restaurants...</p>
                 </div>
-              ) : filteredRestaurants.length === 0 ? (
+              ) : restaurants.length === 0 ? (
                 <Card className="p-8 bg-slate-800 border-slate-700 text-center">
                   <Utensils className="w-12 h-12 text-slate-600 mx-auto mb-3" />
                   <h3 className="text-slate-300 mb-2">No Restaurants Available</h3>
                   <p className="text-sm text-slate-500">
-                    {committedSearchQuery ? 
-                      `No restaurants found matching "${committedSearchQuery}"` : 
-                      'No restaurants are available at the moment'}
+                    No restaurants are available at the moment
                   </p>
                 </Card>
               ) : (
                 <div className="space-y-4">
-                  {filteredRestaurants.map((restaurant) => (
+                  {restaurants.map((restaurant) => (
                     <motion.div
                       key={restaurant.id}
                       whileTap={{ scale: 0.98 }}
-                      onClick={() => setSelectedRestaurant(restaurant)}
+                      onClick={() => {
+                        setSelectedRestaurant(restaurant);
+                        setSelectedDate(new Date()); // Reset to today for new bookings
+                      }}
                     >
                       <Card className="overflow-hidden bg-slate-800 border-slate-700 active:bg-slate-750">
                         <div className="flex gap-4">
@@ -1076,11 +1036,26 @@ export function ConsumerAppMobile({
             animate={{ opacity: 1, x: 0 }}
             className="space-y-6"
           >
-            <h2 className="text-2xl text-slate-100">My Reservations</h2>
+            <h2 className="text-2xl text-slate-100 mb-4">My Reservations</h2>
 
-            {/* Upcoming */}
-            <div>
-              <h3 className="text-lg text-slate-100 mb-3">Upcoming</h3>
+            <Tabs defaultValue="upcoming" className="w-full">
+              <TabsList className="bg-slate-800/50 border border-slate-700 p-1 w-full grid grid-cols-2 mb-6">
+                <TabsTrigger 
+                  value="upcoming"
+                  className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-cyan-600 data-[state=active]:to-blue-600 data-[state=active]:text-white data-[state=active]:shadow-lg data-[state=inactive]:text-slate-400 data-[state=inactive]:hover:text-slate-200 transition-all duration-200"
+                >
+                  Upcoming
+                </TabsTrigger>
+                <TabsTrigger 
+                  value="past"
+                  className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-cyan-600 data-[state=active]:to-blue-600 data-[state=active]:text-white data-[state=active]:shadow-lg data-[state=inactive]:text-slate-400 data-[state=inactive]:hover:text-slate-200 transition-all duration-200"
+                >
+                  Past
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="upcoming" className="mt-0">
+              <div>
               {isLoadingReservations ? (
                 <div className="text-center py-8">
                   <p className="text-slate-400">Loading reservations...</p>
@@ -1169,7 +1144,72 @@ export function ConsumerAppMobile({
                   ))}
                 </div>
               )}
-            </div>
+              </div>
+              </TabsContent>
+
+              <TabsContent value="past" className="mt-0">
+                {isLoadingReservations ? (
+                  <div className="text-center py-8">
+                    <p className="text-slate-400">Loading past reservations...</p>
+                  </div>
+                ) : reservations.filter((r) => r.status === 'completed').length === 0 ? (
+                  <Card className="p-8 bg-slate-800 border-slate-700 text-center">
+                    <Calendar className="w-12 h-12 mx-auto mb-3 text-slate-600" />
+                    <p className="text-slate-400">No past reservations</p>
+                    <p className="text-slate-500 text-sm mt-2">Your dining history will appear here</p>
+                  </Card>
+                ) : (
+                  <div className="space-y-3">
+                    {reservations
+                      .filter((r) => r.status === 'completed')
+                      .map((reservation) => (
+                        <Card key={reservation.id} className="p-4 bg-slate-800/50 border-slate-700">
+                          <div className="flex items-start gap-3 mb-3">
+                            <div className="w-12 h-12 bg-gradient-to-br from-slate-600 to-slate-700 rounded-lg flex items-center justify-center flex-shrink-0">
+                              <Utensils className="w-6 h-6 text-slate-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <h4 className="text-slate-100 mb-1">{reservation.restaurantName}</h4>
+                              <Badge className="bg-slate-500/20 text-slate-400 text-xs">
+                                Completed
+                              </Badge>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-3 text-xs">
+                            <div>
+                              <div className="text-slate-500 mb-1">Date</div>
+                              <div className="text-slate-300">
+                                {new Date(reservation.date).toLocaleDateString('en-US', {
+                                  month: 'short',
+                                  day: 'numeric',
+                                })}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-slate-500 mb-1">Time</div>
+                              <div className="text-slate-300">{reservation.time}</div>
+                            </div>
+                            <div>
+                              <div className="text-slate-500 mb-1">Guests</div>
+                              <div className="text-slate-300">{reservation.partySize}</div>
+                            </div>
+                          </div>
+
+                          {reservation.pointsEarned && (
+                            <div className="mt-3 pt-3 border-t border-slate-700 text-xs">
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-400">Points Earned</span>
+                                <span className="text-cyan-400 font-semibold">+{reservation.pointsEarned}</span>
+                              </div>
+                            </div>
+                          )}
+                        </Card>
+                      ))}
+                  </div>
+                )}
+              </TabsContent>
+            </Tabs>
           </motion.div>
         )}
 
@@ -1204,7 +1244,10 @@ export function ConsumerAppMobile({
                       <div className="flex gap-2">
                         <Button
                           className="flex-1 bg-blue-600 hover:bg-blue-700"
-                          onClick={() => setSelectedRestaurant(restaurant)}
+                          onClick={() => {
+                            setSelectedRestaurant(restaurant);
+                            setSelectedDate(new Date()); // Reset to today for new bookings
+                          }}
                         >
                           Reserve
                         </Button>
@@ -1502,6 +1545,149 @@ export function ConsumerAppMobile({
         )}
       </div>
 
+      {/* All Restaurants Dialog */}
+      <Dialog open={showAllRestaurants} onOpenChange={setShowAllRestaurants}>
+        <DialogContent className="bg-slate-900 border-slate-700 max-w-full h-[90vh] overflow-hidden flex flex-col p-0">
+          <DialogHeader className="p-6 pb-4 border-b border-slate-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <DialogTitle className="text-2xl text-slate-100">All Restaurants</DialogTitle>
+                <DialogDescription className="text-slate-400 mt-1">
+                  Browse our complete collection
+                </DialogDescription>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowAllRestaurants(false)}
+              >
+                <X className="w-5 h-5" />
+              </Button>
+            </div>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            {/* Search Bar */}
+            <div className="sticky top-0 bg-slate-900 pb-4 z-10">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
+                <Input
+                  placeholder="Search restaurants..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-10 bg-slate-800 border-slate-700 text-slate-100"
+                />
+              </div>
+              <Button 
+                className="w-full mt-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700"
+                onClick={() => {
+                  setCommittedSearchQuery(searchQuery);
+                  toast.success('Search applied', {
+                    description: searchQuery ? `Searching for "${searchQuery}"` : 'Showing all restaurants',
+                    duration: 2000
+                  });
+                }}
+              >
+                <Search className="w-4 h-4 mr-2" />
+                Search
+              </Button>
+            </div>
+
+            {/* Restaurant List */}
+            {isLoadingRestaurants ? (
+              <div className="text-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-500 mx-auto"></div>
+                <p className="text-slate-400 mt-4">Loading restaurants...</p>
+              </div>
+            ) : filteredRestaurants.length === 0 ? (
+              <Card className="p-8 bg-slate-800/50 border-slate-700 text-center">
+                <Utensils className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                <h3 className="text-slate-300 mb-2">No Restaurants Found</h3>
+                <p className="text-sm text-slate-500 mb-4">
+                  {committedSearchQuery ? 
+                    `No restaurants found matching "${committedSearchQuery}"` : 
+                    'No restaurants are available at the moment'}
+                </p>
+                {committedSearchQuery && (
+                  <Button 
+                    variant="outline"
+                    size="sm"
+                    className="border-slate-600"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setCommittedSearchQuery('');
+                    }}
+                  >
+                    Clear Search
+                  </Button>
+                )}
+              </Card>
+            ) : (
+              <>
+                <div className="flex items-center justify-between text-sm text-slate-400 pb-2">
+                  <span>{filteredRestaurants.length} {filteredRestaurants.length === 1 ? 'restaurant' : 'restaurants'} found</span>
+                  {committedSearchQuery && (
+                    <Button 
+                      variant="ghost"
+                      size="sm"
+                      className="text-cyan-400 h-auto p-0"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setCommittedSearchQuery('');
+                      }}
+                    >
+                      Clear
+                      <X className="w-3 h-3 ml-1" />
+                    </Button>
+                  )}
+                </div>
+                
+                <div className="space-y-3">
+                  {filteredRestaurants.map((restaurant) => (
+                    <motion.div
+                      key={restaurant.id}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => {
+                        setSelectedRestaurant(restaurant);
+                        setSelectedDate(new Date());
+                        setShowAllRestaurants(false);
+                      }}
+                    >
+                      <Card className="overflow-hidden bg-slate-800 border-slate-700 active:bg-slate-750">
+                        <div className="flex gap-3">
+                          <div
+                            className="w-24 h-24 bg-cover bg-center flex-shrink-0"
+                            style={{ backgroundImage: `url(${restaurant.image})` }}
+                          />
+                          <div className="flex-1 py-3 pr-3 min-w-0">
+                            <div className="flex items-start justify-between mb-2">
+                              <h4 className="text-slate-100 truncate pr-2">{restaurant.name}</h4>
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+                                <span className="text-xs text-slate-100">{restaurant.rating}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-slate-400 mb-2">
+                              <span>{restaurant.cuisine}</span>
+                              <span>•</span>
+                              <span>{'$'.repeat(restaurant.priceLevel)}</span>
+                            </div>
+                            <div className="flex items-center gap-1 text-xs text-slate-500">
+                              <MapPin className="w-3 h-3" />
+                              <span>{restaurant.distance}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
+                    </motion.div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Bottom Navigation */}
       {!isChatViewOpen && (
         <div className="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 px-2 py-2 z-50">
@@ -1699,19 +1885,17 @@ export function ConsumerAppMobile({
                 </select>
               </div>
 
-              {/* Date Selection (for modify only) */}
-              {modifyingReservation && (
-                <div className="mb-6">
-                  <h3 className="text-lg text-slate-100 mb-3">Select Date</h3>
-                  <input
-                    type="date"
-                    value={selectedDate.toISOString().split('T')[0]}
-                    onChange={(e) => setSelectedDate(new Date(e.target.value))}
-                    min={new Date().toISOString().split('T')[0]}
-                    className="w-full h-12 px-4 bg-slate-800 border border-slate-700 rounded-md text-slate-100"
-                  />
-                </div>
-              )}
+              {/* Date Selection */}
+              <div className="mb-6">
+                <h3 className="text-lg text-slate-100 mb-3">Select Date</h3>
+                <input
+                  type="date"
+                  value={selectedDate.toISOString().split('T')[0]}
+                  onChange={(e) => setSelectedDate(new Date(e.target.value))}
+                  min={new Date().toISOString().split('T')[0]}
+                  className="w-full h-12 px-4 bg-slate-800 border border-slate-700 rounded-md text-slate-100"
+                />
+              </div>
 
               {/* Time Selection */}
               <div className="mb-6">

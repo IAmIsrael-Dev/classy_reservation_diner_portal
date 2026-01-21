@@ -65,6 +65,10 @@ export interface Reservation {
   time: string;
   partySize: number;
   status: 'confirmed' | 'pending' | 'cancelled' | 'completed' | 'no-show';
+  type: 'table' | 'experience'; // Distinguishes table reservations from experience bookings
+  experienceId?: string; // Reference to Experience if type is 'experience'
+  experienceTitle?: string; // Cached experience title for quick display
+  tableId?: string; // Reference to table if type is 'table'
   specialRequests?: string;
   createdAt: string;
   updatedAt?: string;
@@ -105,12 +109,18 @@ export interface Experience {
   description: string;
   price: number;
   duration: string; // e.g., "2 hours"
+  capacity: number; // Maximum number of participants
+  bookedCount?: number; // Current number of bookings (calculated field)
   images: string[];
-  availableDates: string[];
+  date: string; // Specific date for the experience
+  time: string; // Specific time for the experience
+  availableDates: string[]; // For recurring experiences
   maxPartySize: number;
   included: string[];
   tags: string[];
+  status: 'active' | 'inactive' | 'full'; // Status of the experience
   createdAt: string;
+  updatedAt?: string;
 }
 
 // Waitlist Entry Interface

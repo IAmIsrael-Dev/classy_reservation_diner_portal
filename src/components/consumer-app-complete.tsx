@@ -38,7 +38,7 @@ import { ConversationsList } from './conversations-list';
 import { ChatPopup } from './chat-popup';
 import { getOrCreateConversation } from '../lib/firebase-conversations';
 import type { User as FirebaseUser } from 'firebase/auth';
-import type { UserProfile, Conversation } from '../lib/types';
+import type { UserProfile, Conversation, Experience } from '../lib/types';
 import { getUserRecommendations, type AIRecommendation as FirebaseAIRecommendation } from '../lib/firebase-recommendations';
 import {
   Search,
@@ -108,13 +108,18 @@ interface MockExperience {
   name: string;
   description: string;
   price: number;
+  capacity: number; // Maximum number of participants
+  bookedCount?: number; // Current number of bookings
   icon?: string;
   includes?: string[];
   restaurantId: string;
   restaurantName: string;
   restaurantImage?: string;
   date?: string;
+  time?: string;
+  duration?: string;
   availableSlots?: string[];
+  status?: 'active' | 'inactive' | 'full';
 }
 
 interface MockWaitlistEntry {
@@ -139,8 +144,12 @@ interface MockReservation {
   time: string;
   partySize: number;
   status: 'confirmed' | 'pending' | 'cancelled' | 'completed' | 'no-show';
+  type: 'table' | 'experience'; // Distinguishes table reservations from experience bookings
+  experienceId?: string; // Reference to Experience if type is 'experience'
+  experienceTitle?: string; // Cached experience title for quick display
+  tableId?: string; // Reference to table if type is 'table'
   confirmationCode?: string;
-  experience?: string;
+  experience?: string; // Legacy field for backwards compatibility
   pointsEarned?: number;
   specialRequests?: string;
   createdAt?: string;
@@ -155,7 +164,7 @@ type HoursObject = {
 type Hours = string | HoursObject | undefined;
 
 // Type for Consumer App views
-export type ConsumerAppView = 'discover' | 'experiences' | 'reservations' | 'waitlist' | 'messages' | 'profile';
+export type ConsumerAppView = 'discover' | 'all-restaurants' | 'experiences' | 'reservations' | 'waitlist' | 'messages' | 'profile';
 
 // Type for Consumer App props
 export interface ConsumerAppProps {
@@ -202,33 +211,6 @@ interface FirebaseRestaurantData {
 }
 
 // ===== UTILITY FUNCTIONS =====
-const roundToNearest15 = (date: Date): string => {
-  const minutes = date.getMinutes();
-  const roundedMinutes = Math.ceil(minutes / 15) * 15;
-  const newDate = new Date(date);
-  newDate.setMinutes(roundedMinutes);
-  newDate.setSeconds(0);
-  
-  const hours = newDate.getHours();
-  const mins = newDate.getMinutes();
-  const period = hours >= 12 ? 'PM' : 'AM';
-  const displayHours = hours % 12 || 12;
-  
-  return `${displayHours}:${mins.toString().padStart(2, '0')} ${period}`;
-};
-
-const generateTimeSlots = (): string[] => {
-  const slots: string[] = [];
-  for (let hour = 11; hour <= 22; hour++) {
-    for (let minute = 0; minute < 60; minute += 15) {
-      const period = hour >= 12 ? 'PM' : 'AM';
-      const displayHour = hour > 12 ? hour - 12 : hour;
-      slots.push(`${displayHour}:${minute.toString().padStart(2, '0')} ${period}`);
-    }
-  }
-  return slots;
-};
-
 // Helper to convert hours object to string
 const formatHoursToString = (hours: Hours): string => {
   // If already a string, return it
@@ -300,6 +282,31 @@ const transformToMockRestaurant = (firebaseRestaurant: FirebaseRestaurantData): 
   };
 };
 
+// Transform Firebase Experience to MockExperience with display fields
+const transformToMockExperience = (firebaseExperience: Experience): MockExperience => {
+  return {
+    id: firebaseExperience.id,
+    name: firebaseExperience.title,
+    description: firebaseExperience.description,
+    price: firebaseExperience.price,
+    capacity: firebaseExperience.capacity,
+    bookedCount: firebaseExperience.bookedCount || 0,
+    duration: firebaseExperience.duration,
+    time: firebaseExperience.time,
+    status: firebaseExperience.status || 'active',
+    includes: firebaseExperience.included,
+    restaurantId: firebaseExperience.restaurantId,
+    restaurantName: firebaseExperience.restaurantName,
+    restaurantImage: Array.isArray(firebaseExperience.images) && firebaseExperience.images.length > 0
+      ? firebaseExperience.images[0]
+      : undefined,
+    date: firebaseExperience.date || (Array.isArray(firebaseExperience.availableDates) && firebaseExperience.availableDates.length > 0
+      ? firebaseExperience.availableDates[0]
+      : undefined),
+    availableSlots: firebaseExperience.availableDates,
+  };
+};
+
 // ===== MOCK DATA =====
 const mockExperiences: MockExperience[] = [
   {
@@ -307,65 +314,90 @@ const mockExperiences: MockExperience[] = [
     name: 'Wine Pairing Experience',
     description: 'Sommelier-curated wine pairing with each course',
     price: 75,
+    capacity: 12,
+    bookedCount: 8,
+    duration: '2.5 hours',
     icon: '🍷',
     includes: ['5 wine selections', 'Sommelier consultation', 'Pairing notes'],
     restaurantId: '1',
     restaurantName: 'Bella Vista',
     restaurantImage: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
-    date: '2025-10-30',
+    date: 'Saturday, Jan 25, 2026',
+    time: '7:00 PM',
     availableSlots: ['6:00 PM', '6:30 PM', '7:00 PM', '8:00 PM'],
+    status: 'active',
   },
   {
     id: 'exp2',
     name: "Chef's Table",
     description: 'Exclusive tasting menu prepared tableside by the head chef',
     price: 150,
+    capacity: 6,
+    bookedCount: 3,
+    duration: '3 hours',
     icon: '👨‍🍳',
     includes: ['8-course tasting menu', 'Chef interaction', 'Kitchen tour', 'Recipe card'],
     restaurantId: '2',
     restaurantName: 'Sakura House',
     restaurantImage: 'https://images.unsplash.com/photo-1579027989536-b7b1f875659b?w=800&h=600&fit=crop',
-    date: '2025-10-28',
+    date: 'Friday, Jan 24, 2026',
+    time: '6:00 PM',
     availableSlots: ['6:00 PM', '7:00 PM', '8:00 PM'],
+    status: 'active',
   },
   {
     id: 'exp3',
     name: 'Celebration Package',
     description: 'Perfect for birthdays and anniversaries',
     price: 50,
+    capacity: 20,
+    bookedCount: 5,
+    duration: '2 hours',
     icon: '🎉',
     includes: ['Champagne toast', 'Dessert upgrade', 'Personalized card', 'Polaroid photo'],
     restaurantId: '1',
     restaurantName: 'Bella Vista',
     restaurantImage: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
-    date: '2025-11-01',
+    date: 'Sunday, Jan 26, 2026',
+    time: '6:00 PM',
     availableSlots: ['5:00 PM', '6:00 PM', '7:00 PM', '8:00 PM', '9:00 PM'],
+    status: 'active',
   },
   {
     id: 'exp4',
     name: 'Cocktail Masterclass',
     description: 'Learn to craft signature cocktails before dinner',
     price: 45,
+    capacity: 10,
+    bookedCount: 10,
+    duration: '1.5 hours',
     icon: '🍸',
     includes: ['3 cocktails', 'Recipe cards', 'Bar tools', 'Appetizer plate'],
     restaurantId: '4',
     restaurantName: 'Fusion Kitchen',
     restaurantImage: 'https://images.unsplash.com/photo-1552566626-52f8b828add9?w=800&h=600&fit=crop',
-    date: '2025-10-26',
+    date: 'Wednesday, Jan 22, 2026',
+    time: '5:30 PM',
     availableSlots: ['5:00 PM', '5:30 PM', '6:00 PM', '7:00 PM'],
+    status: 'full',
   },
   {
     id: 'exp5',
     name: 'Truffle Tasting Menu',
     description: 'Five-course menu featuring seasonal truffles',
     price: 120,
+    capacity: 16,
+    bookedCount: 12,
+    duration: '2.5 hours',
     icon: '🍄',
     includes: ['5 courses', 'Truffle shavings', 'Wine pairing', 'Truffle butter to take home'],
     restaurantId: '5',
     restaurantName: 'Le Jardin',
     restaurantImage: 'https://images.unsplash.com/photo-1550966871-3ed3cdb5ed0c?w=800&h=600&fit=crop',
-    date: '2025-11-05',
+    date: 'Tuesday, Feb 3, 2026',
+    time: '6:30 PM',
     availableSlots: ['6:00 PM', '6:30 PM', '8:00 PM'],
+    status: 'active',
   },
 ];
 
@@ -644,7 +676,6 @@ export function ConsumerApp({
   const [searchQuery, setSearchQuery] = useState('');
   const [committedSearchQuery, setCommittedSearchQuery] = useState(''); // Search query committed by button click
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [selectedTime, setSelectedTime] = useState<string>(roundToNearest15(new Date()));
   const [partySize, setPartySize] = useState('2');
   const [selectedRestaurant, setSelectedRestaurant] = useState<MockRestaurant | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -654,6 +685,8 @@ export function ConsumerApp({
   const [reservationTime, setReservationTime] = useState('');
   const [reservationExperience, setReservationExperience] = useState<string | null>(null);
   const [modifyingReservation, setModifyingReservation] = useState<MockReservation | null>(null);
+  const [bookingType, setBookingType] = useState<'table' | 'experience'>('table'); // Type of booking
+  const [selectedExperienceForBooking, setSelectedExperienceForBooking] = useState<MockExperience | null>(null);
   
   // Data loading states
   const [restaurants, setRestaurants] = useState<MockRestaurant[]>([]);
@@ -718,9 +751,10 @@ export function ConsumerApp({
       const demoData = getDemoData();
       // Transform demo restaurants to ensure hours are strings
       const transformedDemoRestaurants = demoData.restaurants.map(transformToMockRestaurant);
+      const transformedDemoExperiences = demoData.experiences.map(transformToMockExperience);
       setRestaurants(transformedDemoRestaurants);
       setReservations(demoData.reservations as unknown as MockReservation[]);
-      setExperiences(demoData.experiences as unknown as MockExperience[]);
+      setExperiences(transformedDemoExperiences);
       setWaitlist(demoData.waitlist as unknown as MockWaitlistEntry[]);
       setProfile(demoUserProfile);
     } else {
@@ -764,7 +798,8 @@ export function ConsumerApp({
     setIsLoadingExperiences(true);
     try {
       const experiencesData = await fetchAllExperiences();
-      setExperiences(experiencesData as unknown as MockExperience[]);
+      const transformedExperiences = experiencesData.map(transformToMockExperience);
+      setExperiences(transformedExperiences);
     } catch (error) {
       console.error('Error loading experiences:', error);
       toast.error('Failed to load experiences');
@@ -917,6 +952,9 @@ export function ConsumerApp({
     setBookingStep('time');
     setReservationTime('');
     setReservationExperience(null);
+    setSelectedDate(new Date()); // Reset to today for new bookings
+    setBookingType('table'); // Set booking type to table
+    setSelectedExperienceForBooking(null); // Clear any selected experience
     
     // Check if restaurant is in favorites
     if (!isDemoMode && currentUser) {
@@ -955,46 +993,114 @@ export function ConsumerApp({
     }
   };
 
+  // Toggle favorite by restaurant ID (for quick actions in lists)
+  const handleToggleFavoriteById = async (restaurantId: string) => {
+    if (!currentUser) return;
+    
+    const isFav = favoriteRestaurants.some(fav => fav.id === restaurantId);
+    
+    if (isFav) {
+      const success = await removeFavoriteRestaurant(currentUser.uid, restaurantId);
+      if (success) {
+        toast.success('Removed from favorites');
+        // Refresh favorites list
+        const favoritesData = await fetchFavoriteRestaurants(currentUser.uid);
+        const transformedFavorites = favoritesData.map(transformToMockRestaurant);
+        setFavoriteRestaurants(transformedFavorites);
+      } else {
+        toast.error('Failed to remove from favorites');
+      }
+    } else {
+      const success = await addFavoriteRestaurant(currentUser.uid, restaurantId);
+      if (success) {
+        toast.success('Added to favorites');
+        // Refresh favorites list
+        const favoritesData = await fetchFavoriteRestaurants(currentUser.uid);
+        const transformedFavorites = favoritesData.map(transformToMockRestaurant);
+        setFavoriteRestaurants(transformedFavorites);
+      } else {
+        toast.error('Failed to add to favorites');
+      }
+    }
+  };
+
   const handleBookExperience = (experience: MockExperience) => {
-    const restaurant = mockRestaurants.find(r => r.id === experience.restaurantId);
+    const restaurant = (restaurants.length > 0 ? restaurants : mockRestaurants).find(r => r.id === experience.restaurantId);
     if (restaurant) {
       setSelectedRestaurant(restaurant);
       setSelectedExperience(experience);
+      setSelectedExperienceForBooking(experience); // Set the selected experience for booking
       setReservationExperience(experience.name);
+      setViewingRestaurantDetails(true);
+      setSelectedDate(new Date()); // Reset to today for new bookings
       setBookingStep('time');
+      setBookingType('experience'); // Set booking type to experience
+      setReservationTime(''); // Clear table reservation time
     }
   };
 
   const handleCompleteBooking = async () => {
-    if (!selectedRestaurant || !reservationTime) return;
+    // Validation based on booking type
+    if (bookingType === 'table' && (!selectedRestaurant || !reservationTime)) return;
+    if (bookingType === 'experience' && (!selectedRestaurant || !selectedExperienceForBooking)) return;
 
     // Create reservation in Firebase
     if (!isDemoMode && currentUser) {
-      const reservationData = {
-        userId: currentUser.uid,
-        restaurantId: selectedRestaurant.id,
-        restaurantName: selectedRestaurant.name,
-        restaurantImage: selectedRestaurant.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
-        date: selectedDate.toISOString(),
-        time: reservationTime,
-        partySize: parseInt(partySize),
-        status: 'confirmed' as const,
-        ...(reservationExperience && { specialRequests: reservationExperience }),
-        createdAt: new Date().toISOString(),
-      };
+      const reservationData = bookingType === 'experience' && selectedExperienceForBooking
+        ? {
+            // Experience booking
+            userId: currentUser.uid,
+            restaurantId: selectedRestaurant!.id,
+            restaurantName: selectedRestaurant!.name,
+            restaurantImage: selectedRestaurant!.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
+            date: selectedExperienceForBooking.date || new Date().toISOString(),
+            time: selectedExperienceForBooking.time || '6:00 PM',
+            partySize: 1, // Experience bookings are typically per person
+            status: 'confirmed' as const,
+            type: 'experience' as const,
+            experienceId: selectedExperienceForBooking.id,
+            experienceTitle: selectedExperienceForBooking.name,
+            specialRequests: `Experience: ${selectedExperienceForBooking.name}`,
+            createdAt: new Date().toISOString(),
+          }
+        : {
+            // Table reservation
+            userId: currentUser.uid,
+            restaurantId: selectedRestaurant!.id,
+            restaurantName: selectedRestaurant!.name,
+            restaurantImage: selectedRestaurant!.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
+            date: selectedDate.toISOString(),
+            time: reservationTime,
+            partySize: parseInt(partySize),
+            status: 'confirmed' as const,
+            type: 'table' as const,
+            ...(reservationExperience && { specialRequests: reservationExperience }),
+            createdAt: new Date().toISOString(),
+          };
 
       const reservationId = await createReservation(reservationData);
       
       if (reservationId) {
-        toast.success(
-          <div>
-            <div className="font-bold">Reservation Confirmed!</div>
-            <div className="text-sm">
-              {selectedRestaurant.name} - {reservationTime}
-              {reservationExperience && ` with ${reservationExperience}`}
+        if (bookingType === 'experience' && selectedExperienceForBooking) {
+          toast.success(
+            <div>
+              <div className="font-bold">Experience Booked!</div>
+              <div className="text-sm">
+                {selectedExperienceForBooking.name} at {selectedRestaurant!.name}
+              </div>
             </div>
-          </div>
-        );
+          );
+        } else {
+          toast.success(
+            <div>
+              <div className="font-bold">Reservation Confirmed!</div>
+              <div className="text-sm">
+                {selectedRestaurant!.name} - {reservationTime}
+                {reservationExperience && ` with ${reservationExperience}`}
+              </div>
+            </div>
+          );
+        }
         
         // Refresh reservations list
         const reservationsData = await fetchUserReservations(currentUser.uid);
@@ -1005,21 +1111,34 @@ export function ConsumerApp({
       }
     } else {
       // Demo mode - just show success toast
-      toast.success(
-        <div>
-          <div className="font-bold">Reservation Confirmed! (Demo Mode)</div>
-          <div className="text-sm">
-            {selectedRestaurant.name} - {reservationTime}
-            {reservationExperience && ` with ${reservationExperience}`}
+      if (bookingType === 'experience' && selectedExperienceForBooking) {
+        toast.success(
+          <div>
+            <div className="font-bold">Experience Booked! (Demo Mode)</div>
+            <div className="text-sm">
+              {selectedExperienceForBooking.name} at {selectedRestaurant!.name}
+            </div>
           </div>
-        </div>
-      );
+        );
+      } else {
+        toast.success(
+          <div>
+            <div className="font-bold">Reservation Confirmed! (Demo Mode)</div>
+            <div className="text-sm">
+              {selectedRestaurant!.name} - {reservationTime}
+              {reservationExperience && ` with ${reservationExperience}`}
+            </div>
+          </div>
+        );
+      }
     }
 
     setSelectedRestaurant(null);
     setSelectedExperience(null);
     setReservationTime('');
     setReservationExperience(null);
+    setBookingType('table');
+    setSelectedExperienceForBooking(null);
     setViewingRestaurantDetails(false);
   };
 
@@ -1256,7 +1375,7 @@ export function ConsumerApp({
   return (
     <div className="min-h-screen bg-slate-900">
       <div className="container mx-auto px-6 py-6 max-w-7xl">
-        {/* DISCOVER VIEW */}
+        {/* RESTAURANTS VIEW */}
         {activeView === 'discover' && (
           <motion.div
             key="discover"
@@ -1267,10 +1386,10 @@ export function ConsumerApp({
             {/* Hero Search Section */}
             <div className="text-center space-y-4 py-8">
               <h1 className="text-4xl text-slate-100">
-                Find Your Perfect Dining Experience
+                Reserve a Table at Top Restaurants
               </h1>
               <p className="text-lg text-slate-400">
-                AI-powered recommendations tailored to your taste
+                Browse and book tables at the best dining spots
               </p>
             </div>
 
@@ -1346,149 +1465,34 @@ export function ConsumerApp({
               )}
             </div>
 
-            {/* Search Bar with Date, Time, and Party Size - NOW BELOW AI RECOMMENDATIONS */}
-            <Card className="p-6 bg-slate-800/50 border-slate-700">
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  {/* Search */}
-                  <div className="md:col-span-1">
-                    <Label className="text-slate-300 mb-2 block">Search</Label>
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
-                      <Input
-                        placeholder="Restaurant or cuisine"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-10 bg-slate-700 border-slate-600 text-slate-100"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Date */}
-                  <div>
-                    <Label className="text-slate-300 mb-2 block">Date</Label>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          className="w-full justify-start bg-slate-700 border-slate-600 text-slate-100"
-                        >
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-                          {selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0 bg-slate-800 border-slate-700">
-                        <Calendar
-                          mode="single"
-                          selected={selectedDate}
-                          onSelect={(date) => date && setSelectedDate(date)}
-                          className="rounded-md"
-                        />
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-
-                  {/* Time */}
-                  <div>
-                    <Label className="text-slate-300 mb-2 block">Time</Label>
-                    <Select value={selectedTime} onValueChange={setSelectedTime}>
-                      <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
-                        <Clock className="mr-2 h-4 w-4" />
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-slate-800 border-slate-700">
-                        {generateTimeSlots().map(slot => (
-                          <SelectItem key={slot} value={slot}>{slot}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Party Size */}
-                  <div>
-                    <Label className="text-slate-300 mb-2 block">Guests</Label>
-                    <Select value={partySize} onValueChange={setPartySize}>
-                      <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
-                        <Users className="mr-2 h-4 w-4" />
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-slate-800 border-slate-700">
-                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(num => (
-                          <SelectItem key={num} value={num.toString()}>
-                            {num} {num === 1 ? 'Guest' : 'Guests'}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* Search/Filter Button */}
-                <div className="flex justify-center pt-4">
-                  <Button 
-                    size="lg"
-                    className="group relative bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:from-blue-700 hover:via-blue-600 hover:to-cyan-600 text-white shadow-xl hover:shadow-2xl hover:shadow-blue-500/50 px-16 py-6 rounded-xl transition-all duration-300 hover:scale-105 border border-blue-400/20"
-                    onClick={() => {
-                      // Commit the search query to trigger filtering
-                      setCommittedSearchQuery(searchQuery);
-                      
-                      // Scroll to restaurant listings
-                      const restaurantSection = document.querySelector('[data-section="restaurants"]');
-                      if (restaurantSection) {
-                        restaurantSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                      }
-                      // Show toast with search criteria
-                      const searchSummary = [
-                        searchQuery && `"${searchQuery}"`,
-                        selectedDate && selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-                        selectedTime,
-                        `${partySize} ${partySize === '1' ? 'guest' : 'guests'}`
-                      ].filter(Boolean).join(' • ');
-                      
-                      toast.success('Searching for tables...', {
-                        description: searchSummary,
-                        duration: 2000
-                      });
-                    }}
-                  >
-                    <Search className="w-5 h-5 mr-2 group-hover:rotate-90 transition-transform duration-300" />
-                    <span className="tracking-wide">Find Tables</span>
-                  </Button>
-                </div>
-              </div>
-            </Card>
-
             {/* Restaurant Listings */}
             <div data-section="restaurants">
-              <h2 className="text-2xl text-slate-100 mb-4">Available Restaurants</h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-2xl text-slate-100">Available Restaurants</h2>
+                <Button
+                  variant="ghost"
+                  className="text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10"
+                  onClick={() => setActiveView('all-restaurants')}
+                >
+                  See All Restaurants
+                  <ChevronRight className="w-4 h-4 ml-1" />
+                </Button>
+              </div>
               {isLoadingRestaurants ? (
                 <div className="text-center py-12">
                   <p className="text-slate-400">Loading restaurants...</p>
                 </div>
-              ) : filteredRestaurants.length === 0 ? (
+              ) : restaurants.length === 0 ? (
                 <Card className="p-12 bg-slate-800/50 border-slate-700 text-center">
                   <Utensils className="w-16 h-16 text-slate-600 mx-auto mb-4" />
                   <h3 className="text-xl text-slate-300 mb-2">No Restaurants Available</h3>
                   <p className="text-slate-500">
-                    {committedSearchQuery ? 
-                      `No restaurants found matching "${committedSearchQuery}". Try a different search.` : 
-                      'No restaurants are available at the moment. Please check back later.'}
+                    No restaurants are available at the moment. Please check back later.
                   </p>
-                  {committedSearchQuery && (
-                    <Button 
-                      className="mt-6 bg-blue-600 hover:bg-blue-700"
-                      onClick={() => {
-                        setSearchQuery('');
-                        setCommittedSearchQuery('');
-                      }}
-                    >
-                      Clear Search
-                    </Button>
-                  )}
                 </Card>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {filteredRestaurants.map(restaurant => (
+                  {restaurants.map(restaurant => (
                   <motion.div
                     key={restaurant.id}
                     whileHover={{ scale: 1.02 }}
@@ -1646,6 +1650,225 @@ export function ConsumerApp({
           </motion.div>
         )}
 
+        {/* ALL RESTAURANTS VIEW */}
+        {activeView === 'all-restaurants' && (
+          <motion.div
+            key="all-restaurants"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="space-y-6"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-4xl text-slate-100 mb-2">
+                  All Restaurants
+                </h1>
+                <p className="text-lg text-slate-400">
+                  Browse our complete collection of dining spots
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="border-slate-600 text-slate-300 hover:bg-slate-700"
+                onClick={() => setActiveView('discover')}
+              >
+                <ChevronRight className="w-4 h-4 mr-2 rotate-180" />
+                Back to Discover
+              </Button>
+            </div>
+
+            {/* Enhanced Search Bar */}
+            <Card className="p-6 bg-slate-800/50 border-slate-700">
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Search */}
+                  <div className="md:col-span-2">
+                    <Label className="text-slate-300 mb-2 block">Search Restaurants</Label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-500" />
+                      <Input
+                        placeholder="Search by name, cuisine, or location..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="pl-10 bg-slate-700 border-slate-600 text-slate-100"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Sort By */}
+                  <div>
+                    <Label className="text-slate-300 mb-2 block">Sort By</Label>
+                    <Select defaultValue="rating">
+                      <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        <SelectItem value="rating">Highest Rated</SelectItem>
+                        <SelectItem value="reviews">Most Reviews</SelectItem>
+                        <SelectItem value="distance">Nearest</SelectItem>
+                        <SelectItem value="price-low">Price: Low to High</SelectItem>
+                        <SelectItem value="price-high">Price: High to Low</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <Button 
+                  className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 group"
+                  onClick={() => {
+                    setCommittedSearchQuery(searchQuery);
+                    toast.success('Search applied', {
+                      description: searchQuery ? `Searching for "${searchQuery}"` : 'Showing all restaurants',
+                      duration: 2000
+                    });
+                  }}
+                >
+                  <Search className="w-5 h-5 mr-2 group-hover:rotate-90 transition-transform duration-300" />
+                  <span className="tracking-wide">Search Restaurants</span>
+                </Button>
+              </div>
+            </Card>
+
+            {/* Restaurant Grid */}
+            {isLoadingRestaurants ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-500"></div>
+              </div>
+            ) : filteredRestaurants.length === 0 ? (
+              <Card className="p-12 bg-slate-800/50 border-slate-700 text-center">
+                <Utensils className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                <h3 className="text-xl text-slate-300 mb-2">No Restaurants Found</h3>
+                <p className="text-slate-500 mb-6">
+                  {committedSearchQuery ? 
+                    `No restaurants found matching "${committedSearchQuery}". Try a different search.` : 
+                    'No restaurants are available at the moment. Please check back later.'}
+                </p>
+                {committedSearchQuery && (
+                  <Button 
+                    className="bg-blue-600 hover:bg-blue-700"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setCommittedSearchQuery('');
+                    }}
+                  >
+                    Clear Search
+                  </Button>
+                )}
+              </Card>
+            ) : (
+              <>
+                <div className="flex items-center justify-between text-sm text-slate-400 pb-2 border-b border-slate-700">
+                  <span>{filteredRestaurants.length} {filteredRestaurants.length === 1 ? 'restaurant' : 'restaurants'} found</span>
+                  {committedSearchQuery && (
+                    <Button 
+                      variant="ghost"
+                      size="sm"
+                      className="text-cyan-400 hover:text-cyan-300"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setCommittedSearchQuery('');
+                      }}
+                    >
+                      Clear Search
+                      <X className="w-3 h-3 ml-1" />
+                    </Button>
+                  )}
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {filteredRestaurants.map(restaurant => (
+                    <motion.div
+                      key={restaurant.id}
+                      whileHover={{ scale: 1.02 }}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                    >
+                      <Card className="overflow-hidden bg-slate-800/50 border-slate-700 hover:border-cyan-500/50 transition-all cursor-pointer"
+                        onClick={() => handleBookRestaurant(restaurant)}
+                      >
+                        <div className="relative h-48">
+                          <img
+                            src={restaurant.image}
+                            alt={restaurant.name}
+                            className="w-full h-full object-cover"
+                          />
+                          {restaurant.aiScore && restaurant.aiScore > 85 && (
+                            <div className="absolute top-3 right-3">
+                              <Badge className="bg-gradient-to-r from-cyan-500 to-blue-600 text-white border-0">
+                                <Sparkles className="w-3 h-3 mr-1" />
+                                AI Match {restaurant.aiScore}%
+                              </Badge>
+                            </div>
+                          )}
+                          <div className="absolute top-3 left-3">
+                            <Badge variant="secondary" className="bg-slate-900/80 backdrop-blur-sm">
+                              {restaurant.distance}
+                            </Badge>
+                          </div>
+                        </div>
+
+                        <div className="p-5 space-y-3">
+                          <div>
+                            <div className="flex items-start justify-between mb-2">
+                              <h3 className="text-lg text-slate-100">{restaurant.name}</h3>
+                              <div className="flex items-center gap-1">
+                                <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                                <span className="text-sm text-slate-100">{restaurant.rating}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 text-sm text-slate-400">
+                              <span>{restaurant.cuisine}</span>
+                              <span>•</span>
+                              <span>{'$'.repeat(restaurant.priceLevel)}</span>
+                              <span>•</span>
+                              <span>{restaurant.reviews} reviews</span>
+                            </div>
+                          </div>
+
+                          {restaurant.aiReason && (
+                            <div className="p-2 bg-cyan-500/10 border border-cyan-500/20 rounded text-xs text-cyan-300">
+                              ✨ {restaurant.aiReason}
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-2 pt-2">
+                            <Button 
+                              className="flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleBookRestaurant(restaurant);
+                              }}
+                            >
+                              Reserve Table
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="outline"
+                              className="border-slate-600 hover:bg-slate-700"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleFavoriteById(restaurant.id);
+                              }}
+                            >
+                              <Heart 
+                                className={`w-4 h-4 ${
+                                  favoriteRestaurants.some(fav => fav.id === restaurant.id)
+                                    ? 'fill-red-500 text-red-500' 
+                                    : 'text-slate-400'
+                                }`} 
+                              />
+                            </Button>
+                          </div>
+                        </div>
+                      </Card>
+                    </motion.div>
+                  ))}
+                </div>
+              </>
+            )}
+          </motion.div>
+        )}
+
         {/* RESERVATIONS VIEW */}
         {activeView === 'reservations' && (
           <motion.div
@@ -1666,9 +1889,19 @@ export function ConsumerApp({
             </div>
 
             <Tabs defaultValue="upcoming" className="w-full">
-              <TabsList className="bg-slate-800">
-                <TabsTrigger value="upcoming">Upcoming</TabsTrigger>
-                <TabsTrigger value="past">Past</TabsTrigger>
+              <TabsList className="bg-slate-800/50 border border-slate-700 p-1 w-full grid grid-cols-2">
+                <TabsTrigger 
+                  value="upcoming"
+                  className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-cyan-600 data-[state=active]:to-blue-600 data-[state=active]:text-white data-[state=active]:shadow-lg data-[state=inactive]:text-slate-400 data-[state=inactive]:hover:text-slate-200 transition-all duration-200"
+                >
+                  Upcoming
+                </TabsTrigger>
+                <TabsTrigger 
+                  value="past"
+                  className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-cyan-600 data-[state=active]:to-blue-600 data-[state=active]:text-white data-[state=active]:shadow-lg data-[state=inactive]:text-slate-400 data-[state=inactive]:hover:text-slate-200 transition-all duration-200"
+                >
+                  Past
+                </TabsTrigger>
               </TabsList>
 
               <TabsContent value="upcoming" className="space-y-4 mt-6">
@@ -1708,6 +1941,12 @@ export function ConsumerApp({
                             <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
                               Confirmed
                             </Badge>
+                            {res.type === 'experience' && (
+                              <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30">
+                                <Sparkles className="w-3 h-3 mr-1" />
+                                Experience
+                              </Badge>
+                            )}
                           </div>
                           {res.restaurantAddress && (
                             <div className="text-sm text-slate-400 mb-1">
@@ -2208,6 +2447,8 @@ export function ConsumerApp({
         setModifyingReservation(null);
         setReservationTime('');
         setReservationExperience(null);
+        setBookingType('table');
+        setSelectedExperienceForBooking(null);
         setViewingRestaurantDetails(false);
       }}>
         <DialogContent className="bg-slate-800 border-slate-700 max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -2217,7 +2458,12 @@ export function ConsumerApp({
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <DialogTitle className="text-2xl text-slate-100">
-                      {modifyingReservation ? 'Modify Reservation' : 'Book a Table'}
+                      {modifyingReservation 
+                        ? 'Modify Reservation' 
+                        : bookingType === 'experience'
+                        ? 'Book an Experience'
+                        : 'Reserve a Table'
+                      }
                     </DialogTitle>
                     <DialogDescription className="text-slate-400">
                       {selectedRestaurant.name}
@@ -2358,35 +2604,38 @@ export function ConsumerApp({
 
                 {/* Divider */}
                 <div className="border-t border-slate-700 pt-6">
-                  <h4 className="text-lg text-slate-100 mb-4">Make a Reservation</h4>
+                  <h4 className="text-lg text-slate-100 mb-4">
+                    {modifyingReservation ? 'Modify Reservation' : 'Make a Reservation'}
+                  </h4>
                 </div>
 
-                {/* Select Date (for modify only) */}
-                {modifyingReservation && (
-                  <div>
-                    <Label className="text-slate-300 mb-2 block">Select Date</Label>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          className="w-full justify-start text-left bg-slate-700 border-slate-600 text-slate-100 hover:bg-slate-600"
-                        >
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-                          {selectedDate ? selectedDate.toLocaleDateString() : 'Pick a date'}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0 bg-slate-800 border-slate-700" align="start">
-                        <Calendar
-                          mode="single"
-                          selected={selectedDate}
-                          onSelect={(date) => date && setSelectedDate(date)}
-                          disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
-                          className="rounded-md"
-                        />
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-                )}
+                {/* Table Booking Flow */}
+                {bookingType === 'table' && (
+                  <>
+                    {/* Select Date */}
+                    <div>
+                      <Label className="text-slate-300 mb-2 block">Select Date</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-full justify-start text-left bg-slate-700 border-slate-600 text-slate-100 hover:bg-slate-600"
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {selectedDate ? selectedDate.toLocaleDateString() : 'Pick a date'}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0 bg-slate-800 border-slate-700" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={selectedDate}
+                        onSelect={(date) => date && setSelectedDate(date)}
+                        disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
+                        className="rounded-md"
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </div>
 
                 {/* Select Time */}
                 <div>
@@ -2425,36 +2674,142 @@ export function ConsumerApp({
                   </div>
                 )}
 
-                {/* Add Experience (optional) */}
-                {!modifyingReservation && selectedRestaurant.experiences && selectedRestaurant.experiences.length > 0 && (
-                  <div>
-                    <Label className="text-slate-300 mb-2 block">Add an Experience (Optional)</Label>
-                    <div className="space-y-2">
-                      {(selectedRestaurant.experiences || []).map(exp => (
-                        <Card
-                          key={exp.id}
-                          className={`p-4 cursor-pointer transition-all ${
-                            reservationExperience === exp.name
-                              ? 'bg-purple-500/20 border-purple-500'
-                              : 'bg-slate-900/50 border-slate-700 hover:border-purple-500/50'
-                          }`}
-                          onClick={() => setReservationExperience(
-                            reservationExperience === exp.name ? null : exp.name
-                          )}
-                        >
-                          <div className="flex items-start gap-3">
-                            <div className="text-2xl">{exp.icon}</div>
-                            <div className="flex-1">
-                              <div className="flex items-start justify-between">
-                                <h4 className="text-slate-100">{exp.name}</h4>
-                                <div className="text-purple-400">+${exp.price}</div>
+                    {/* Add Experience (optional) for table reservations */}
+                    {!modifyingReservation && selectedRestaurant.experiences && selectedRestaurant.experiences.length > 0 && (
+                      <div>
+                        <Label className="text-slate-300 mb-2 block">Add an Experience (Optional)</Label>
+                        <div className="space-y-2">
+                          {(selectedRestaurant.experiences || []).map(exp => (
+                            <Card
+                              key={exp.id}
+                              className={`p-4 cursor-pointer transition-all ${
+                                reservationExperience === exp.name
+                                  ? 'bg-purple-500/20 border-purple-500'
+                                  : 'bg-slate-900/50 border-slate-700 hover:border-purple-500/50'
+                              }`}
+                              onClick={() => setReservationExperience(
+                                reservationExperience === exp.name ? null : exp.name
+                              )}
+                            >
+                              <div className="flex items-start gap-3">
+                                <div className="text-2xl">{exp.icon}</div>
+                                <div className="flex-1">
+                                  <div className="flex items-start justify-between">
+                                    <h4 className="text-slate-100">{exp.name}</h4>
+                                    <div className="text-purple-400">+${exp.price}</div>
+                                  </div>
+                                  <p className="text-sm text-slate-400 mt-1">{exp.description}</p>
+                                </div>
                               </div>
-                              <p className="text-sm text-slate-400 mt-1">{exp.description}</p>
-                            </div>
-                          </div>
-                        </Card>
-                      ))}
-                    </div>
+                            </Card>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* Experience Booking Flow */}
+                {bookingType === 'experience' && !modifyingReservation && (
+                  <div>
+                    <Label className="text-slate-300 mb-3 block">Select an Experience</Label>
+                    {selectedRestaurant.experiences && selectedRestaurant.experiences.length > 0 ? (
+                      <div className="space-y-3">
+                        {selectedRestaurant.experiences.map(exp => {
+                          const remainingCapacity = exp.capacity - (exp.bookedCount || 0);
+                          const isFull = remainingCapacity <= 0;
+                          
+                          return (
+                            <Card
+                              key={exp.id}
+                              className={`p-5 cursor-pointer transition-all border-2 ${
+                                selectedExperienceForBooking?.id === exp.id
+                                  ? 'bg-purple-500/20 border-purple-500'
+                                  : isFull
+                                  ? 'bg-slate-900/30 border-slate-700 opacity-50 cursor-not-allowed'
+                                  : 'bg-slate-900/50 border-slate-700 hover:border-purple-500/50'
+                              }`}
+                              onClick={() => !isFull && setSelectedExperienceForBooking(
+                                selectedExperienceForBooking?.id === exp.id ? null : exp
+                              )}
+                            >
+                              <div className="flex items-start gap-4">
+                                <div className="text-3xl">{exp.icon || '🎭'}</div>
+                                <div className="flex-1">
+                                  <div className="flex items-start justify-between mb-2">
+                                    <div>
+                                      <h4 className="text-lg font-semibold text-slate-100 mb-1">{exp.name}</h4>
+                                      <p className="text-sm text-slate-400">{exp.description}</p>
+                                    </div>
+                                    <div className="text-right ml-4">
+                                      <div className="text-xl font-bold text-purple-400">${exp.price}</div>
+                                      {exp.duration && (
+                                        <div className="text-xs text-slate-500">{exp.duration}</div>
+                                      )}
+                                    </div>
+                                  </div>
+                                  
+                                  {/* Date & Time */}
+                                  {exp.date && exp.time && (
+                                    <div className="flex items-center gap-4 text-sm text-slate-300 mb-2">
+                                      <div className="flex items-center gap-1">
+                                        <CalendarIcon className="w-4 h-4 text-cyan-400" />
+                                        <span>{exp.date}</span>
+                                      </div>
+                                      <div className="flex items-center gap-1">
+                                        <Clock className="w-4 h-4 text-cyan-400" />
+                                        <span>{exp.time}</span>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Capacity */}
+                                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-700">
+                                    <div className="flex items-center gap-2">
+                                      <Users className="w-4 h-4 text-slate-400" />
+                                      <span className="text-sm text-slate-400">
+                                        {isFull ? (
+                                          <span className="text-red-400 font-semibold">Fully Booked</span>
+                                        ) : (
+                                          <>
+                                            <span className="text-cyan-400 font-semibold">{remainingCapacity}</span>
+                                            <span> / {exp.capacity} spots available</span>
+                                          </>
+                                        )}
+                                      </span>
+                                    </div>
+                                    {!isFull && selectedExperienceForBooking?.id === exp.id && (
+                                      <Badge className="bg-purple-500 text-white">Selected</Badge>
+                                    )}
+                                  </div>
+
+                                  {/* What's Included */}
+                                  {exp.includes && exp.includes.length > 0 && (
+                                    <div className="mt-3">
+                                      <div className="text-xs text-slate-500 mb-1">What's Included:</div>
+                                      <div className="flex flex-wrap gap-1">
+                                        {exp.includes.map((item, idx) => (
+                                          <Badge key={idx} className="bg-slate-700/50 text-slate-300 text-xs border-slate-600">
+                                            <Check className="w-3 h-3 mr-1" />
+                                            {item}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </Card>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="text-center py-8 px-4 bg-slate-900/30 rounded-lg border border-slate-700">
+                        <Sparkles className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                        <p className="text-slate-400">No experiences available at this time</p>
+                        <p className="text-sm text-slate-500 mt-1">Try booking a table instead</p>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -2468,16 +2823,29 @@ export function ConsumerApp({
                       setModifyingReservation(null);
                       setReservationTime('');
                       setReservationExperience(null);
+                      setBookingType('table');
+                      setSelectedExperienceForBooking(null);
                     }}
                   >
                     Cancel
                   </Button>
                   <Button
-                    className="flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700"
+                    className={`flex-1 ${
+                      bookingType === 'experience'
+                        ? 'bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700'
+                        : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700'
+                    }`}
                     onClick={modifyingReservation ? handleSaveModification : handleCompleteBooking}
-                    disabled={!reservationTime}
+                    disabled={
+                      bookingType === 'table' ? !reservationTime : !selectedExperienceForBooking
+                    }
                   >
-                    {modifyingReservation ? 'Save Changes' : 'Confirm Booking'}
+                    {modifyingReservation 
+                      ? 'Save Changes' 
+                      : bookingType === 'experience'
+                      ? 'Book Experience'
+                      : 'Confirm Booking'
+                    }
                   </Button>
                 </div>
               </div>
