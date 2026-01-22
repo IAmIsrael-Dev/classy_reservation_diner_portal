@@ -17,11 +17,15 @@ import { signOutUser, uploadProfilePicture } from '../lib/firebase-auth';
 import { 
   fetchRestaurants, 
   fetchUserReservations,
+  fetchUserWaitlist,
   fetchUserProfile,
   updateUserProfile,
   updateNotificationSettings,
   updateDiningPreferences,
   updatePaymentMethods,
+  fetchFavoriteRestaurants,
+  addFavoriteRestaurant,
+  removeFavoriteRestaurant,
   createReservation,
   updateReservation,
   cancelReservation
@@ -107,6 +111,17 @@ interface MockReservation {
   pointsEarned?: number;
   specialRequests?: string;
   createdAt?: string;
+}
+
+interface MockWaitlistEntry {
+  id: string;
+  restaurantName: string;
+  restaurantImage: string;
+  position: number;
+  totalWaiting: number;
+  estimatedWait: number;
+  partySize: number;
+  notifyReady: boolean;
 }
 
 // Type for hours object from Firebase
@@ -339,13 +354,13 @@ export function ConsumerAppMobile({
   isDemoMode = false,
   currentUser
 }: { 
-  activeTab?: 'home' | 'reservations' | 'saved' | 'messages' | 'profile';
-  onTabChange?: (tab: 'home' | 'reservations' | 'saved' | 'messages' | 'profile') => void;
+  activeTab?: 'home' | 'reservations' | 'saved' | 'waitlist' | 'messages' | 'profile';
+  onTabChange?: (tab: 'home' | 'reservations' | 'saved' | 'waitlist' | 'messages' | 'profile') => void;
   isDemoMode?: boolean;
   currentUser?: FirebaseUser | null;
   userProfile?: UserProfile | null;
 } = {}) {
-  const [activeTab, setActiveTab] = useState<'home' | 'reservations' | 'saved' | 'messages' | 'profile'>(externalActiveTab || 'home');
+  const [activeTab, setActiveTab] = useState<'home' | 'reservations' | 'saved' | 'waitlist' | 'messages' | 'profile'>(externalActiveTab || 'home');
   const [searchQuery, setSearchQuery] = useState('');
   const [committedSearchQuery, setCommittedSearchQuery] = useState(''); // Search query committed by button click
   const [partySize, setPartySize] = useState(2);
@@ -365,6 +380,10 @@ export function ConsumerAppMobile({
   const [isLoadingReservations, setIsLoadingReservations] = useState(false);
   const [aiRecommendations, setAiRecommendations] = useState<FirebaseAIRecommendation[]>([]);
   const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(false);
+  const [waitlistEntries, setWaitlistEntries] = useState<MockWaitlistEntry[]>([]);
+  const [isLoadingWaitlist, setIsLoadingWaitlist] = useState(false);
+  const [favoriteRestaurants, setFavoriteRestaurants] = useState<MockRestaurant[]>([]);
+  const [isLoadingFavorites, setIsLoadingFavorites] = useState(false);
 
   // Profile states
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -484,6 +503,31 @@ export function ConsumerAppMobile({
     } finally {
       setIsLoadingRecommendations(false);
     }
+
+    // Fetch waitlist entries
+    setIsLoadingWaitlist(true);
+    try {
+      const waitlistData = await fetchUserWaitlist(currentUser.uid);
+      setWaitlistEntries(waitlistData as unknown as MockWaitlistEntry[]);
+    } catch (error) {
+      console.error('Error loading waitlist:', error);
+      setWaitlistEntries([]); // Set empty array on error
+    } finally {
+      setIsLoadingWaitlist(false);
+    }
+
+    // Fetch user's favorite restaurants
+    setIsLoadingFavorites(true);
+    try {
+      const favoritesData = await fetchFavoriteRestaurants(currentUser.uid);
+      const transformedFavorites = favoritesData.map(transformToMockRestaurant);
+      setFavoriteRestaurants(transformedFavorites);
+    } catch (error) {
+      console.error('Error loading favorites:', error);
+      setFavoriteRestaurants([]); // Set empty array on error
+    } finally {
+      setIsLoadingFavorites(false);
+    }
   };
 
   // Settings save handlers
@@ -543,7 +587,7 @@ export function ConsumerAppMobile({
   }, [externalActiveTab]);
 
   // Handle tab change
-  const handleTabChange = (tab: 'home' | 'reservations' | 'saved' | 'messages' | 'profile') => {
+  const handleTabChange = (tab: 'home' | 'reservations' | 'saved' | 'waitlist' | 'messages' | 'profile') => {
     setActiveTab(tab);
     // Reset chat view when leaving messages tab
     if (tab !== 'messages') {
@@ -727,13 +771,43 @@ export function ConsumerAppMobile({
     handleTabChange('reservations');
   };
 
-  const toggleSave = (restaurantId: string) => {
-    if (savedRestaurants.includes(restaurantId)) {
-      setSavedRestaurants(savedRestaurants.filter(id => id !== restaurantId));
-      toast.success('Removed from saved');
-    } else {
-      setSavedRestaurants([...savedRestaurants, restaurantId]);
-      toast.success('Added to saved');
+  const toggleSave = async (restaurantId: string) => {
+    if (isDemoMode) {
+      // Demo mode - use local state
+      if (savedRestaurants.includes(restaurantId)) {
+        setSavedRestaurants(savedRestaurants.filter(id => id !== restaurantId));
+        toast.success('Removed from saved (demo mode)');
+      } else {
+        setSavedRestaurants([...savedRestaurants, restaurantId]);
+        toast.success('Added to saved (demo mode)');
+      }
+    } else if (currentUser) {
+      // Firebase mode - persist to database
+      const isFavorited = favoriteRestaurants.some(fav => fav.id === restaurantId);
+      
+      if (isFavorited) {
+        const success = await removeFavoriteRestaurant(currentUser.uid, restaurantId);
+        if (success) {
+          // Refresh favorites list
+          const favoritesData = await fetchFavoriteRestaurants(currentUser.uid);
+          const transformedFavorites = favoritesData.map(transformToMockRestaurant);
+          setFavoriteRestaurants(transformedFavorites);
+          toast.success('Removed from saved');
+        } else {
+          toast.error('Failed to remove from saved');
+        }
+      } else {
+        const success = await addFavoriteRestaurant(currentUser.uid, restaurantId);
+        if (success) {
+          // Refresh favorites list
+          const favoritesData = await fetchFavoriteRestaurants(currentUser.uid);
+          const transformedFavorites = favoritesData.map(transformToMockRestaurant);
+          setFavoriteRestaurants(transformedFavorites);
+          toast.success('Added to saved');
+        } else {
+          toast.error('Failed to add to saved');
+        }
+      }
     }
   };
 
@@ -848,22 +922,22 @@ export function ConsumerAppMobile({
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 pb-20">
+    <div className="min-h-screen bg-slate-900 pb-20 sm:pb-24">
       {/* Content */}
-      <div className="px-4 py-6">
+      <div className="px-3 sm:px-4 py-4 sm:py-6">
         {activeTab === 'home' && (
           <motion.div
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="space-y-6"
+            className="space-y-4 sm:space-y-6"
           >
             {/* Page Title */}
             <div>
-              <h2 className="text-2xl text-slate-100">
+              <h2 className="text-xl sm:text-2xl text-slate-100">
                 Discover{' '}
                 <span className="text-blue-400">Restaurants</span>
               </h2>
-              <p className="text-slate-400 mt-1">Browse and book tables at the best dining spots</p>
+              <p className="text-sm sm:text-base text-slate-400 mt-1">Browse and book tables at the best dining spots</p>
             </div>
 
             {/* AI Concierge Recommendations */}
@@ -996,7 +1070,10 @@ export function ConsumerAppMobile({
                               >
                                 <Heart
                                   className={`w-5 h-5 ${
-                                    savedRestaurants.includes(restaurant.id)
+                                    (isDemoMode 
+                                      ? savedRestaurants.includes(restaurant.id)
+                                      : favoriteRestaurants.some(fav => fav.id === restaurant.id)
+                                    )
                                       ? 'fill-red-500 text-red-500'
                                       : 'text-slate-400'
                                   }`}
@@ -1034,9 +1111,9 @@ export function ConsumerAppMobile({
           <motion.div
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="space-y-6"
+            className="space-y-4 sm:space-y-6"
           >
-            <h2 className="text-2xl text-slate-100 mb-4">My Reservations</h2>
+            <h2 className="text-xl sm:text-2xl text-slate-100 mb-4">My Reservations</h2>
 
             <Tabs defaultValue="upcoming" className="w-full">
               <TabsList className="bg-slate-800/50 border border-slate-700 p-1 w-full grid grid-cols-2 mb-6">
@@ -1217,14 +1294,20 @@ export function ConsumerAppMobile({
           <motion.div
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="space-y-6"
+            className="space-y-4 sm:space-y-6"
           >
-            <h2 className="text-2xl text-slate-100">Saved</h2>
+            <h2 className="text-xl sm:text-2xl text-slate-100">Saved</h2>
 
-            <div className="space-y-4">
-              {mockRestaurants
-                .filter((r) => savedRestaurants.includes(r.id))
-                .map((restaurant) => (
+            {isLoadingFavorites ? (
+              <div className="text-center py-12">
+                <p className="text-slate-400">Loading saved restaurants...</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {(isDemoMode 
+                  ? mockRestaurants.filter((r) => savedRestaurants.includes(r.id))
+                  : favoriteRestaurants
+                ).map((restaurant) => (
                   <Card
                     key={restaurant.id}
                     className="overflow-hidden bg-slate-800 border-slate-700"
@@ -1264,16 +1347,91 @@ export function ConsumerAppMobile({
                   </Card>
                 ))}
 
-              {savedRestaurants.length === 0 && (
-                <Card className="p-12 bg-slate-800 border-slate-700 text-center">
-                  <Bookmark className="w-16 h-16 mx-auto mb-4 text-slate-600" />
-                  <h3 className="text-lg text-slate-400 mb-2">No saved restaurants</h3>
-                  <p className="text-sm text-slate-500">
-                    Tap the heart icon to save your favorites
-                  </p>
-                </Card>
-              )}
-            </div>
+                {(isDemoMode ? savedRestaurants.length === 0 : favoriteRestaurants.length === 0) && (
+                  <Card className="p-12 bg-slate-800 border-slate-700 text-center">
+                    <Bookmark className="w-16 h-16 mx-auto mb-4 text-slate-600" />
+                    <h3 className="text-lg text-slate-400 mb-2">No saved restaurants</h3>
+                    <p className="text-sm text-slate-500">
+                      Tap the heart icon to save your favorites
+                    </p>
+                  </Card>
+                )}
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {activeTab === 'waitlist' && (
+          <motion.div
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="space-y-4 sm:space-y-6"
+          >
+            <h2 className="text-xl sm:text-2xl text-slate-100">Waitlist</h2>
+
+            {isLoadingWaitlist ? (
+              <div className="text-center py-12">
+                <p className="text-slate-400">Loading waitlist...</p>
+              </div>
+            ) : waitlistEntries.length === 0 ? (
+              <Card className="p-12 bg-slate-800 border-slate-700 text-center">
+                <Clock className="w-16 h-16 mx-auto mb-4 text-slate-600" />
+                <h3 className="text-lg text-slate-400 mb-2">No Active Waitlist Entries</h3>
+                <p className="text-sm text-slate-500">
+                  Join a waitlist to get notified when a table becomes available
+                </p>
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                {waitlistEntries.map((entry) => (
+                  <Card key={entry.id} className="p-4 bg-slate-800 border-slate-700">
+                    <div className="flex gap-4">
+                      <div
+                        className="w-20 h-20 bg-cover bg-center rounded-lg flex-shrink-0"
+                        style={{ backgroundImage: `url(${entry.restaurantImage})` }}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <h4 className="text-slate-100 mb-2">{entry.restaurantName}</h4>
+                        <div className="grid grid-cols-2 gap-3 mb-3 text-xs">
+                          <div>
+                            <div className="text-slate-500 mb-1">Position</div>
+                            <div className="text-cyan-400 font-semibold">#{entry.position} of {entry.totalWaiting}</div>
+                          </div>
+                          <div>
+                            <div className="text-slate-500 mb-1">Est. Wait</div>
+                            <div className="text-slate-300">{entry.estimatedWait} min</div>
+                          </div>
+                          <div>
+                            <div className="text-slate-500 mb-1">Party Size</div>
+                            <div className="text-slate-300">{entry.partySize} {entry.partySize === 1 ? 'guest' : 'guests'}</div>
+                          </div>
+                          <div>
+                            <div className="text-slate-500 mb-1">Notify Ready</div>
+                            <div className="text-slate-300">
+                              {entry.notifyReady ? (
+                                <Check className="w-4 h-4 text-green-500" />
+                              ) : (
+                                <X className="w-4 h-4 text-slate-500" />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full border-slate-600 text-slate-300 hover:bg-slate-700"
+                          onClick={() => {
+                            toast.info('Removed from waitlist');
+                          }}
+                        >
+                          Leave Waitlist
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
           </motion.div>
         )}
 
@@ -1281,11 +1439,11 @@ export function ConsumerAppMobile({
           <motion.div
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="space-y-6"
+            className="space-y-4 sm:space-y-6"
           >
             {!isChatViewOpen ? (
               <>
-                <h2 className="text-2xl text-slate-100">Messages</h2>
+                <h2 className="text-xl sm:text-2xl text-slate-100">Messages</h2>
                 <ConversationsList
                   userId={currentUser?.uid || 'demo-user'}
                   demoMode={isDemoMode}
@@ -1354,9 +1512,9 @@ export function ConsumerAppMobile({
           <motion.div
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="space-y-6"
+            className="space-y-4 sm:space-y-6"
           >
-            <h2 className="text-2xl text-slate-100">Profile</h2>
+            <h2 className="text-xl sm:text-2xl text-slate-100">Profile</h2>
 
             {isLoadingProfile ? (
               <div className="text-center py-12">
@@ -1548,11 +1706,11 @@ export function ConsumerAppMobile({
       {/* All Restaurants Dialog */}
       <Dialog open={showAllRestaurants} onOpenChange={setShowAllRestaurants}>
         <DialogContent className="bg-slate-900 border-slate-700 max-w-full h-[90vh] overflow-hidden flex flex-col p-0">
-          <DialogHeader className="p-6 pb-4 border-b border-slate-700">
+          <DialogHeader className="p-4 sm:p-6 pb-3 sm:pb-4 border-b border-slate-700">
             <div className="flex items-center justify-between">
               <div>
-                <DialogTitle className="text-2xl text-slate-100">All Restaurants</DialogTitle>
-                <DialogDescription className="text-slate-400 mt-1">
+                <DialogTitle className="text-xl sm:text-2xl text-slate-100">All Restaurants</DialogTitle>
+                <DialogDescription className="text-sm sm:text-base text-slate-400 mt-1">
                   Browse our complete collection
                 </DialogDescription>
               </div>
@@ -1566,7 +1724,7 @@ export function ConsumerAppMobile({
             </div>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
             {/* Search Bar */}
             <div className="sticky top-0 bg-slate-900 pb-4 z-10">
               <div className="relative">
@@ -1690,57 +1848,69 @@ export function ConsumerAppMobile({
 
       {/* Bottom Navigation */}
       {!isChatViewOpen && (
-        <div className="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 px-2 py-2 z-50">
-          <div className="flex items-center justify-around">
+        <div className="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 z-50 safe-area-bottom">
+          <div className="flex items-center justify-around px-0.5 py-1.5 sm:px-2 sm:py-2">
           <Button
             variant="ghost"
-            className={`flex-col h-14 ${
+            className={`flex-col h-14 sm:h-14 px-0.5 xs:px-1 sm:px-3 min-w-0 flex-1 ${
               activeTab === 'home' ? 'text-blue-400' : 'text-slate-400'
             }`}
             onClick={() => handleTabChange('home')}
           >
-            <Home className="w-6 h-6 mb-1" />
-            <span className="text-xs">Home</span>
+            <Home className="w-5 h-5 sm:w-6 sm:h-6 mb-0.5 flex-shrink-0" />
+            <span className="text-[9px] xs:text-[10px] sm:text-xs leading-none">Home</span>
           </Button>
           <Button
             variant="ghost"
-            className={`flex-col h-14 ${
+            className={`flex-col h-14 sm:h-14 px-0.5 xs:px-1 sm:px-3 min-w-0 flex-1 ${
               activeTab === 'reservations' ? 'text-blue-400' : 'text-slate-400'
             }`}
             onClick={() => handleTabChange('reservations')}
           >
-            <History className="w-6 h-6 mb-1" />
-            <span className="text-xs">Reservations</span>
+            <History className="w-5 h-5 sm:w-6 sm:h-6 mb-0.5 flex-shrink-0" />
+            <span className="text-[9px] xs:text-[10px] sm:text-xs leading-none hidden xs:block">Reservations</span>
+            <span className="text-[9px] leading-none xs:hidden">Book</span>
           </Button>
           <Button
             variant="ghost"
-            className={`flex-col h-14 ${
+            className={`flex-col h-14 sm:h-14 px-0.5 xs:px-1 sm:px-3 min-w-0 flex-1 ${
               activeTab === 'saved' ? 'text-blue-400' : 'text-slate-400'
             }`}
             onClick={() => handleTabChange('saved')}
           >
-            <Bookmark className="w-6 h-6 mb-1" />
-            <span className="text-xs">Saved</span>
+            <Bookmark className="w-5 h-5 sm:w-6 sm:h-6 mb-0.5 flex-shrink-0" />
+            <span className="text-[9px] xs:text-[10px] sm:text-xs leading-none">Saved</span>
           </Button>
           <Button
             variant="ghost"
-            className={`flex-col h-14 ${
+            className={`flex-col h-14 sm:h-14 px-0.5 xs:px-1 sm:px-3 min-w-0 flex-1 ${
+              activeTab === 'waitlist' ? 'text-blue-400' : 'text-slate-400'
+            }`}
+            onClick={() => handleTabChange('waitlist')}
+          >
+            <Clock className="w-5 h-5 sm:w-6 sm:h-6 mb-0.5 flex-shrink-0" />
+            <span className="text-[9px] xs:text-[10px] sm:text-xs leading-none">Waitlist</span>
+          </Button>
+          <Button
+            variant="ghost"
+            className={`flex-col h-14 sm:h-14 px-0.5 xs:px-1 sm:px-3 min-w-0 flex-1 ${
               activeTab === 'messages' ? 'text-blue-400' : 'text-slate-400'
             }`}
             onClick={() => handleTabChange('messages')}
           >
-            <MessageSquare className="w-6 h-6 mb-1" />
-            <span className="text-xs">Messages</span>
+            <MessageSquare className="w-5 h-5 sm:w-6 sm:h-6 mb-0.5 flex-shrink-0" />
+            <span className="text-[9px] xs:text-[10px] sm:text-xs leading-none hidden xs:block">Messages</span>
+            <span className="text-[9px] leading-none xs:hidden">Chat</span>
           </Button>
           <Button
             variant="ghost"
-            className={`flex-col h-14 ${
+            className={`flex-col h-14 sm:h-14 px-0.5 xs:px-1 sm:px-3 min-w-0 flex-1 ${
               activeTab === 'profile' ? 'text-blue-400' : 'text-slate-400'
             }`}
             onClick={() => handleTabChange('profile')}
           >
-            <User className="w-6 h-6 mb-1" />
-            <span className="text-xs">Profile</span>
+            <User className="w-5 h-5 sm:w-6 sm:h-6 mb-0.5 flex-shrink-0" />
+            <span className="text-[9px] xs:text-[10px] sm:text-xs leading-none">Profile</span>
           </Button>
         </div>
       </div>
@@ -1781,7 +1951,10 @@ export function ConsumerAppMobile({
               >
                 <Heart
                   className={`w-5 h-5 ${
-                    savedRestaurants.includes(selectedRestaurant.id)
+                    (isDemoMode 
+                      ? savedRestaurants.includes(selectedRestaurant.id)
+                      : favoriteRestaurants.some(fav => fav.id === selectedRestaurant.id)
+                    )
                       ? 'fill-red-500 text-red-500'
                       : 'text-slate-300'
                   }`}
@@ -1789,14 +1962,14 @@ export function ConsumerAppMobile({
               </Button>
             </div>
 
-            <div className="px-4 py-6 pb-24">
+            <div className="px-3 sm:px-4 py-4 sm:py-6 pb-24">
               {/* Restaurant Info */}
               <div className="mb-6">
-                <div className="text-sm text-blue-400 mb-2">
+                <div className="text-xs sm:text-sm text-blue-400 mb-2">
                   {modifyingReservation ? 'Modify Reservation' : 'Book a Table'}
                 </div>
-                <h2 className="text-2xl text-slate-100 mb-2">{selectedRestaurant.name}</h2>
-                <div className="flex items-center gap-3 mb-3 text-sm text-slate-400">
+                <h2 className="text-xl sm:text-2xl text-slate-100 mb-2">{selectedRestaurant.name}</h2>
+                <div className="flex items-center gap-2 sm:gap-3 mb-3 text-xs sm:text-sm text-slate-400 flex-wrap">
                   <div className="flex items-center gap-1">
                     <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
                     <span>{selectedRestaurant.rating}</span>
@@ -1806,7 +1979,7 @@ export function ConsumerAppMobile({
                   <span>•</span>
                   <span>{'$'.repeat(selectedRestaurant.priceLevel)}</span>
                 </div>
-                <p className="text-slate-300 mb-4">{selectedRestaurant.description}</p>
+                <p className="text-sm sm:text-base text-slate-300 mb-4">{selectedRestaurant.description}</p>
                 
                 {/* Address and Hours */}
                 <div className="space-y-2 mb-4">

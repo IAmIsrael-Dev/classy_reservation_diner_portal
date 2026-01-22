@@ -184,18 +184,21 @@ export default function App() {
     };
 
     // Map activePage to ConsumerAppMobile tab (mobile)
-    const mapPageToTab = (page: string): 'home' | 'reservations' | 'saved' | 'messages' | 'profile' => {
+    const mapPageToTab = (page: string): 'home' | 'reservations' | 'saved' | 'waitlist' | 'messages' | 'profile' => {
       if (page === 'dashboard') return 'home';
-      if (page === 'experiences') return 'saved'; // Experiences maps to saved on mobile
-      if (page === 'waitlist') return 'reservations'; // Waitlist maps to reservations on mobile
+      if (page === 'experiences') return 'saved';
+      if (page === 'waitlist') return 'waitlist';
       if (page === 'messages') return 'messages';
-      return page as 'reservations' | 'profile';
+      if (page === 'reservations') return 'reservations';
+      return page as 'home' | 'reservations' | 'saved' | 'waitlist' | 'messages' | 'profile';
     };
 
-    const mapTabToPage = (tab: 'home' | 'reservations' | 'saved' | 'messages' | 'profile'): string => {
+    const mapTabToPage = (tab: 'home' | 'reservations' | 'saved' | 'waitlist' | 'messages' | 'profile'): string => {
       if (tab === 'home') return 'dashboard';
       if (tab === 'saved') return 'experiences';
+      if (tab === 'waitlist') return 'waitlist';
       if (tab === 'messages') return 'messages';
+      if (tab === 'reservations') return 'reservations';
       return tab;
     };
 
@@ -203,7 +206,7 @@ export default function App() {
       setActivePage(mapViewToPage(view));
     };
 
-    const handleTabChange = (tab: 'home' | 'reservations' | 'saved' | 'messages' | 'profile') => {
+    const handleTabChange = (tab: 'home' | 'reservations' | 'saved' | 'waitlist' | 'messages' | 'profile') => {
       setActivePage(mapTabToPage(tab));
     };
 
