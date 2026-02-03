@@ -372,6 +372,11 @@ export function ConsumerAppMobile({
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_bookingType] = useState<'table' | 'experience'>('table'); // Reserved for future dual booking implementation
   const [showAllRestaurants, setShowAllRestaurants] = useState(false); // For All Restaurants modal
+  const [quickReservationDialog, setQuickReservationDialog] = useState(false);
+  const [quickReservationRestaurant, setQuickReservationRestaurant] = useState<MockRestaurant | null>(null);
+  const [quickReservationDate, setQuickReservationDate] = useState<Date>(new Date());
+  const [quickReservationTime, setQuickReservationTime] = useState('');
+  const [quickReservationPartySize, setQuickReservationPartySize] = useState(2);
   
   // Data states
   const [restaurants, setRestaurants] = useState<MockRestaurant[]>(mockRestaurants);
@@ -771,6 +776,50 @@ export function ConsumerAppMobile({
     handleTabChange('reservations');
   };
 
+  const handleQuickReservationConfirm = async () => {
+    if (!quickReservationRestaurant || !quickReservationTime) return;
+
+    // Create reservation in Firebase
+    if (!isDemoMode && currentUser) {
+      const reservationData = {
+        userId: currentUser.uid,
+        restaurantId: quickReservationRestaurant.id,
+        restaurantName: quickReservationRestaurant.name,
+        restaurantImage: quickReservationRestaurant.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=600&fit=crop',
+        date: quickReservationDate.toISOString(),
+        time: quickReservationTime,
+        partySize: quickReservationPartySize,
+        status: 'confirmed' as const,
+        type: 'table' as const,
+        createdAt: new Date().toISOString(),
+      };
+
+      const reservationId = await createReservation(reservationData);
+      
+      if (reservationId) {
+        toast.success('Reservation confirmed!');
+        
+        // Refresh reservations list
+        const reservationsData = await fetchUserReservations(currentUser.uid);
+        setReservations(reservationsData as unknown as MockReservation[]);
+      } else {
+        toast.error('Failed to create reservation');
+        return;
+      }
+    } else {
+      // Demo mode - just show success toast
+      toast.success('Reservation confirmed! (Demo Mode)');
+    }
+
+    // Close dialog and reset
+    setQuickReservationDialog(false);
+    setQuickReservationRestaurant(null);
+    setQuickReservationTime('');
+    setQuickReservationDate(new Date());
+    setQuickReservationPartySize(2);
+    handleTabChange('reservations');
+  };
+
   const toggleSave = async (restaurantId: string) => {
     if (isDemoMode) {
       // Demo mode - use local state
@@ -1046,8 +1095,12 @@ export function ConsumerAppMobile({
                       key={restaurant.id}
                       whileTap={{ scale: 0.98 }}
                       onClick={() => {
-                        setSelectedRestaurant(restaurant);
-                        setSelectedDate(new Date()); // Reset to today for new bookings
+                        // Open quick reservation dialog
+                        setQuickReservationRestaurant(restaurant);
+                        setQuickReservationDialog(true);
+                        setQuickReservationDate(new Date());
+                        setQuickReservationTime('');
+                        setQuickReservationPartySize(2);
                       }}
                     >
                       <Card className="overflow-hidden bg-slate-800 border-slate-700 active:bg-slate-750">
@@ -2061,20 +2114,111 @@ export function ConsumerAppMobile({
               {/* Date Selection */}
               <div className="mb-6">
                 <h3 className="text-lg text-slate-100 mb-3">Select Date</h3>
-                <input
-                  type="date"
-                  value={selectedDate.toISOString().split('T')[0]}
-                  onChange={(e) => setSelectedDate(new Date(e.target.value))}
-                  min={new Date().toISOString().split('T')[0]}
-                  className="w-full h-12 px-4 bg-slate-800 border border-slate-700 rounded-md text-slate-100"
-                />
+                
+                {/* Selected Date Display */}
+                <div className="mb-4 p-4 bg-gradient-to-br from-cyan-600/10 to-blue-600/10 border-2 border-cyan-600/30 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-gradient-to-br from-cyan-600 to-blue-600 rounded-lg">
+                      <Calendar className="h-6 w-6 text-white" />
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-400">Selected Date</div>
+                      <div className="text-lg font-semibold text-white">
+                        {selectedDate?.toLocaleDateString('en-US', { 
+                          weekday: 'long', 
+                          month: 'long', 
+                          day: 'numeric', 
+                          year: 'numeric' 
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Date Dropdowns */}
+                <div className="grid grid-cols-3 gap-3">
+                  {/* Month Dropdown */}
+                  <div>
+                    <Label className="text-slate-400 text-xs mb-1.5 block">Month</Label>
+                    <Select
+                      value={(selectedDate?.getMonth() || new Date().getMonth()).toString()}
+                      onValueChange={(value) => {
+                        const newDate = new Date(selectedDate || new Date());
+                        newDate.setMonth(parseInt(value));
+                        setSelectedDate(newDate);
+                      }}
+                    >
+                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-100">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'].map((month, idx) => (
+                          <SelectItem key={idx} value={idx.toString()}>
+                            {month}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Day Dropdown */}
+                  <div>
+                    <Label className="text-slate-400 text-xs mb-1.5 block">Day</Label>
+                    <Select
+                      value={(selectedDate?.getDate() || new Date().getDate()).toString()}
+                      onValueChange={(value) => {
+                        const newDate = new Date(selectedDate || new Date());
+                        newDate.setDate(parseInt(value));
+                        setSelectedDate(newDate);
+                      }}
+                    >
+                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-100">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700 max-h-60">
+                        {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
+                          <SelectItem key={day} value={day.toString()}>
+                            {day}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Year Dropdown */}
+                  <div>
+                    <Label className="text-slate-400 text-xs mb-1.5 block">Year</Label>
+                    <Select
+                      value={(selectedDate?.getFullYear() || new Date().getFullYear()).toString()}
+                      onValueChange={(value) => {
+                        const newDate = new Date(selectedDate || new Date());
+                        newDate.setFullYear(parseInt(value));
+                        setSelectedDate(newDate);
+                      }}
+                    >
+                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-100">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {Array.from({ length: 3 }, (_, i) => new Date().getFullYear() + i).map((year) => (
+                          <SelectItem key={year} value={year.toString()}>
+                            {year}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
               </div>
 
               {/* Time Selection */}
               <div className="mb-6">
                 <h3 className="text-lg text-slate-100 mb-3">Select Time</h3>
                 <div className="grid grid-cols-2 gap-3">
-                  {(selectedRestaurant.availableSlots || []).map((slot) => (
+                  {(selectedRestaurant.availableSlots && selectedRestaurant.availableSlots.length > 0 
+                    ? selectedRestaurant.availableSlots 
+                    : ['5:00 PM', '5:30 PM', '6:00 PM', '6:30 PM', '7:00 PM', '7:30 PM', '8:00 PM', '8:30 PM', '9:00 PM']
+                  ).map((slot) => (
                     <Button
                       key={slot}
                       variant={selectedTime === slot ? 'default' : 'outline'}
@@ -2101,6 +2245,271 @@ export function ConsumerAppMobile({
               >
                 <Check className="w-5 h-5 mr-2" />
                 {modifyingReservation ? 'Save Changes' : 'Confirm Reservation'}
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Quick Reservation Modal */}
+      <AnimatePresence>
+        {quickReservationDialog && quickReservationRestaurant && (
+          <motion.div
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            exit={{ y: '100%' }}
+            transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+            className="fixed inset-0 bg-slate-900 z-50 overflow-y-auto"
+          >
+            <div className="min-h-screen px-4 py-6 pb-24">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl text-slate-100">Make a Reservation</h2>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={() => {
+                    setQuickReservationDialog(false);
+                    setQuickReservationRestaurant(null);
+                    setQuickReservationTime('');
+                  }}
+                  className="text-slate-400"
+                >
+                  <X className="w-6 h-6" />
+                </Button>
+              </div>
+
+              {/* Restaurant Image */}
+              <div className="relative h-48 rounded-lg overflow-hidden mb-6">
+                <img
+                  src={quickReservationRestaurant.image}
+                  alt={quickReservationRestaurant.name}
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-900/95 to-transparent" />
+                {/* Favorite Button */}
+                {!isDemoMode && currentUser && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={async () => {
+                      const favoriteIds = favoriteRestaurants.map(r => r.id);
+                      const isCurrentlyFavorite = favoriteIds.includes(quickReservationRestaurant.id);
+                      
+                      if (isCurrentlyFavorite) {
+                        const success = await removeFavoriteRestaurant(currentUser.uid, quickReservationRestaurant.id);
+                        if (success) {
+                          toast.success('Removed from favorites');
+                          const favoritesData = await fetchFavoriteRestaurants(currentUser.uid);
+                          const transformedFavorites = favoritesData.map(transformToMockRestaurant);
+                          setFavoriteRestaurants(transformedFavorites);
+                        } else {
+                          toast.error('Failed to remove from favorites');
+                        }
+                      } else {
+                        const success = await addFavoriteRestaurant(currentUser.uid, quickReservationRestaurant.id);
+                        if (success) {
+                          toast.success('Added to favorites');
+                          const favoritesData = await fetchFavoriteRestaurants(currentUser.uid);
+                          const transformedFavorites = favoritesData.map(transformToMockRestaurant);
+                          setFavoriteRestaurants(transformedFavorites);
+                        } else {
+                          toast.error('Failed to add to favorites');
+                        }
+                      }
+                    }}
+                    className="absolute top-4 right-4 bg-slate-900/50 hover:bg-slate-900/70 backdrop-blur-sm"
+                  >
+                    <Heart 
+                      className={`w-6 h-6 transition-all ${
+                        favoriteRestaurants.map(r => r.id).includes(quickReservationRestaurant.id)
+                          ? 'fill-red-500 text-red-500' 
+                          : 'text-white hover:text-red-500'
+                      }`} 
+                    />
+                  </Button>
+                )}
+                <div className="absolute bottom-4 left-4 right-4">
+                  <h3 className="text-2xl text-slate-100 mb-2">{quickReservationRestaurant.name}</h3>
+                  <div className="flex items-center gap-3 text-xs text-slate-300 mb-2">
+                    <div className="flex items-center gap-1">
+                      <Star className="w-3 h-3 text-yellow-400 fill-yellow-400" />
+                      <span>{quickReservationRestaurant.rating}</span>
+                    </div>
+                    <span>•</span>
+                    <span>{quickReservationRestaurant.cuisine}</span>
+                    <span>•</span>
+                    <span>{'$'.repeat(quickReservationRestaurant.priceLevel)}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <MapPin className="w-3 h-3" />
+                    <span className="truncate">{quickReservationRestaurant.address || quickReservationRestaurant.distance}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Party Size */}
+              <div className="mb-6">
+                <h3 className="text-lg text-slate-100 mb-3">Party Size</h3>
+                <select
+                  value={quickReservationPartySize}
+                  onChange={(e) => setQuickReservationPartySize(Number(e.target.value))}
+                  className="w-full h-12 px-4 bg-slate-800 border border-slate-700 rounded-md text-slate-100"
+                >
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((size) => (
+                    <option key={size} value={size}>
+                      {size} {size === 1 ? 'Guest' : 'Guests'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Date Selection */}
+              <div className="mb-6">
+                <h3 className="text-lg text-slate-100 mb-3">Select Date</h3>
+                
+                {/* Selected Date Display */}
+                <div className="mb-4 p-4 bg-gradient-to-br from-cyan-600/10 to-blue-600/10 border-2 border-cyan-600/30 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-gradient-to-br from-cyan-600 to-blue-600 rounded-lg">
+                      <Calendar className="h-6 w-6 text-white" />
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-400">Selected Date</div>
+                      <div className="text-lg font-semibold text-white">
+                        {quickReservationDate?.toLocaleDateString('en-US', { 
+                          weekday: 'long', 
+                          month: 'long', 
+                          day: 'numeric', 
+                          year: 'numeric' 
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Date Dropdowns */}
+                <div className="grid grid-cols-3 gap-3">
+                  {/* Month Dropdown */}
+                  <div>
+                    <Label className="text-slate-400 text-xs mb-1.5 block">Month</Label>
+                    <Select
+                      value={(quickReservationDate?.getMonth() || new Date().getMonth()).toString()}
+                      onValueChange={(value) => {
+                        const newDate = new Date(quickReservationDate || new Date());
+                        newDate.setMonth(parseInt(value));
+                        setQuickReservationDate(newDate);
+                      }}
+                    >
+                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-100">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'].map((month, idx) => (
+                          <SelectItem key={idx} value={idx.toString()}>
+                            {month}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Day Dropdown */}
+                  <div>
+                    <Label className="text-slate-400 text-xs mb-1.5 block">Day</Label>
+                    <Select
+                      value={(quickReservationDate?.getDate() || new Date().getDate()).toString()}
+                      onValueChange={(value) => {
+                        const newDate = new Date(quickReservationDate || new Date());
+                        newDate.setDate(parseInt(value));
+                        setQuickReservationDate(newDate);
+                      }}
+                    >
+                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-100">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700 max-h-60">
+                        {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
+                          <SelectItem key={day} value={day.toString()}>
+                            {day}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Year Dropdown */}
+                  <div>
+                    <Label className="text-slate-400 text-xs mb-1.5 block">Year</Label>
+                    <Select
+                      value={(quickReservationDate?.getFullYear() || new Date().getFullYear()).toString()}
+                      onValueChange={(value) => {
+                        const newDate = new Date(quickReservationDate || new Date());
+                        newDate.setFullYear(parseInt(value));
+                        setQuickReservationDate(newDate);
+                      }}
+                    >
+                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-100">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {Array.from({ length: 3 }, (_, i) => new Date().getFullYear() + i).map((year) => (
+                          <SelectItem key={year} value={year.toString()}>
+                            {year}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {quickReservationDate && (
+                  <div className="hidden">{/* Removed duplicate display */}
+                    <p className="text-sm text-slate-400 mb-1">Selected Date:</p>
+                    <p className="text-base font-semibold text-slate-100">
+                      {quickReservationDate.toLocaleDateString('en-US', { 
+                        weekday: 'long', 
+                        year: 'numeric', 
+                        month: 'long', 
+                        day: 'numeric' 
+                      })}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Time Selection */}
+              <div className="mb-6">
+                <h3 className="text-lg text-slate-100 mb-3">Select Time</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  {(quickReservationRestaurant.availableSlots && quickReservationRestaurant.availableSlots.length > 0 
+                    ? quickReservationRestaurant.availableSlots 
+                    : ['5:00 PM', '5:30 PM', '6:00 PM', '6:30 PM', '7:00 PM', '7:30 PM', '8:00 PM', '8:30 PM', '9:00 PM']
+                  ).map((slot) => (
+                    <Button
+                      key={slot}
+                      variant={quickReservationTime === slot ? 'default' : 'outline'}
+                      className={`h-12 ${
+                        quickReservationTime === slot
+                          ? 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700'
+                          : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                      }`}
+                      onClick={() => setQuickReservationTime(slot)}
+                    >
+                      {slot}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Fixed Bottom Button */}
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900 border-t border-slate-700">
+              <Button
+                className="w-full h-14 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-lg"
+                onClick={handleQuickReservationConfirm}
+                disabled={!quickReservationTime}
+              >
+                <Check className="w-5 h-5 mr-2" />
+                Confirm Reservation
               </Button>
             </div>
           </motion.div>
