@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Send, Lock } from 'lucide-react';
+import { Send, Lock } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
@@ -157,18 +157,11 @@ export function ChatPopup({
           </div>
           
           {!conversation.isActive && (
-            <div className="flex items-center gap-1 text-slate-500 text-sm mr-2">
+            <div className="flex items-center gap-1 text-slate-500 text-sm">
               <Lock className="w-4 h-4" />
               <span>Closed</span>
             </div>
           )}
-
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-200 transition-colors p-1 hover:bg-slate-800 rounded-lg"
-          >
-            <X className="w-5 h-5" />
-          </button>
         </DialogHeader>
 
         {/* Messages */}

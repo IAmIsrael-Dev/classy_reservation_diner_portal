@@ -400,6 +400,16 @@ export function ConsumerAppMobile({
 
   // Settings dialog states
   const [openSettingsDialog, setOpenSettingsDialog] = useState<'personal' | 'payment' | 'dining' | 'notifications' | 'privacy' | null>(null);
+  const [isAddingCard, setIsAddingCard] = useState(false);
+  const [newCard, setNewCard] = useState({
+    cardNumber: '',
+    cardName: '',
+    expiryMonth: '',
+    expiryYear: '',
+    cvv: '',
+    type: 'Visa' as 'Visa' | 'Mastercard' | 'Amex' | 'Discover',
+    isDefault: false
+  });
 
   // Conversation states
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
@@ -584,6 +594,93 @@ export function ConsumerAppMobile({
     }
   };
 
+  const handleAddPaymentMethod = async () => {
+    // Validate inputs
+    if (!newCard.cardNumber || !newCard.cardName || !newCard.expiryMonth || !newCard.expiryYear || !newCard.cvv) {
+      toast.error('Please fill in all card details');
+      return;
+    }
+
+    // Validate card number (basic check - should be 13-19 digits)
+    const cardNumberClean = newCard.cardNumber.replace(/\s/g, '');
+    if (!/^\d{13,19}$/.test(cardNumberClean)) {
+      toast.error('Invalid card number');
+      return;
+    }
+
+    // Validate CVV (3 or 4 digits)
+    if (!/^\d{3,4}$/.test(newCard.cvv)) {
+      toast.error('Invalid CVV');
+      return;
+    }
+
+    // Validate expiry
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+    const expYear = parseInt(newCard.expiryYear);
+    const expMonth = parseInt(newCard.expiryMonth);
+    
+    if (expYear < currentYear || (expYear === currentYear && expMonth < currentMonth)) {
+      toast.error('Card has expired');
+      return;
+    }
+
+    // Create new payment method
+    const newPaymentMethod = {
+      id: Date.now().toString(),
+      type: newCard.type,
+      last4: cardNumberClean.slice(-4),
+      expiry: `${newCard.expiryMonth}/${newCard.expiryYear.slice(-2)}`,
+      isDefault: newCard.isDefault || paymentMethods.length === 0
+    };
+
+    const updatedMethods = [...paymentMethods, newPaymentMethod];
+    
+    // If this card is set as default, unset other defaults
+    if (newPaymentMethod.isDefault) {
+      updatedMethods.forEach(method => {
+        if (method.id !== newPaymentMethod.id) {
+          method.isDefault = false;
+        }
+      });
+    }
+
+    setPaymentMethods(updatedMethods);
+    
+    if (!isDemoMode && currentUser) {
+      const success = await updatePaymentMethods(currentUser.uid, updatedMethods);
+      if (success) {
+        toast.success('Card added successfully');
+        setIsAddingCard(false);
+        setNewCard({
+          cardNumber: '',
+          cardName: '',
+          expiryMonth: '',
+          expiryYear: '',
+          cvv: '',
+          type: 'Visa',
+          isDefault: false
+        });
+      } else {
+        toast.error('Failed to add card');
+        // Revert on failure
+        setPaymentMethods(paymentMethods);
+      }
+    } else {
+      toast.success('Card added (demo mode)');
+      setIsAddingCard(false);
+      setNewCard({
+        cardNumber: '',
+        cardName: '',
+        expiryMonth: '',
+        expiryYear: '',
+        cvv: '',
+        type: 'Visa',
+        isDefault: false
+      });
+    }
+  };
+
   // Update activeTab when external prop changes
   useEffect(() => {
     if (externalActiveTab) {
@@ -628,7 +725,16 @@ export function ConsumerAppMobile({
       const conversation = conversations.find(c => c.id === conversationId);
 
       if (conversation) {
-        setSelectedConversation(conversation);
+        // Enrich conversation with restaurant details from the reservation
+        const enrichedConversation = {
+          ...conversation,
+          restaurantName: reservation.restaurantName,
+          restaurantImage: reservation.restaurantImage,
+          reservationDate: reservation.date,
+          reservationTime: reservation.time
+        };
+        
+        setSelectedConversation(enrichedConversation);
         setIsChatViewOpen(true); // Open chat view with the conversation
         setActiveTab('messages'); // Navigate to messages tab
         toast.success('Opening conversation with ' + reservation.restaurantName);
@@ -867,7 +973,17 @@ export function ConsumerAppMobile({
         displayName: profile.displayName,
         username: profile.username,
         phoneNumber: profile.phoneNumber,
+        diningPreferences: profile.diningPreferences,
+        notificationSettings: profile.notificationSettings,
       });
+      // Also update local dining preferences state
+      if (profile.diningPreferences) {
+        setDiningPreferences(profile.diningPreferences);
+      }
+      if (profile.notificationSettings) {
+        setNotificationSettings(profile.notificationSettings);
+      }
+      // On mobile, open full-screen edit profile view
       setIsEditingProfile(true);
     }
   };
@@ -914,6 +1030,10 @@ export function ConsumerAppMobile({
             }
           }
         }
+
+        // Add dining preferences and notification settings to profile updates
+        profileUpdates.diningPreferences = diningPreferences;
+        profileUpdates.notificationSettings = notificationSettings;
 
         // Update profile in Firebase (even if photo upload failed)
         const success = await updateUserProfile(currentUser.uid, profileUpdates);
@@ -1620,6 +1740,60 @@ export function ConsumerAppMobile({
                     </div>
                   </div>
                 )}
+
+                {/* Dining Preferences Section */}
+                <div className="mt-4 pt-4 border-t border-slate-700 space-y-3">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Utensils className="w-4 h-4 text-cyan-400" />
+                    <h4 className="text-sm text-slate-100">Dining Preferences</h4>
+                  </div>
+
+                  {/* Favorite Cuisines */}
+                  <div>
+                    <Label className="text-xs text-slate-400 mb-2 block">Favorite Cuisines</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {diningPreferences.favoriteCuisines.length > 0 ? (
+                        diningPreferences.favoriteCuisines.map(cuisine => (
+                          <Badge key={cuisine} className="bg-cyan-600/20 text-cyan-300 border-cyan-500/30 text-xs">
+                            {cuisine}
+                          </Badge>
+                        ))
+                      ) : (
+                        <span className="text-xs text-slate-500">Not set</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Dietary Restrictions */}
+                  <div>
+                    <Label className="text-xs text-slate-400 mb-2 block">Dietary Restrictions</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {diningPreferences.dietaryRestrictions.length > 0 ? (
+                        diningPreferences.dietaryRestrictions.map(restriction => (
+                          <Badge key={restriction} className="bg-amber-500/20 text-amber-300 border-amber-500/30 text-xs">
+                            {restriction}
+                          </Badge>
+                        ))
+                      ) : (
+                        <span className="text-xs text-slate-500">None</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Spice Level */}
+                    <div>
+                      <Label className="text-xs text-slate-400 mb-1 block">Spice Level</Label>
+                      <p className="text-sm text-slate-200">{diningPreferences.spiceLevel}</p>
+                    </div>
+
+                    {/* Seating Preference */}
+                    <div>
+                      <Label className="text-xs text-slate-400 mb-1 block">Seating</Label>
+                      <p className="text-sm text-slate-200">{diningPreferences.seatingPreference}</p>
+                    </div>
+                  </div>
+                </div>
               </Card>
             ) : (
               <Card className="p-8 bg-slate-800 border-slate-700 text-center">
@@ -1664,25 +1838,6 @@ export function ConsumerAppMobile({
                     <div>
                       <div className="text-slate-100">Payment Methods</div>
                       <div className="text-xs text-slate-500">{paymentMethods.length} cards saved</div>
-                    </div>
-                  </div>
-                  <ChevronRight className="w-5 h-5 text-slate-500" />
-                </div>
-              </Card>
-
-              {/* Dining Preferences */}
-              <Card 
-                className="p-4 bg-slate-800 border-slate-700"
-                onClick={() => setOpenSettingsDialog('dining')}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center">
-                      <Utensils className="w-5 h-5 text-slate-400" />
-                    </div>
-                    <div>
-                      <div className="text-slate-100">Dining Preferences</div>
-                      <div className="text-xs text-slate-500">Cuisine, dietary</div>
                     </div>
                   </div>
                   <ChevronRight className="w-5 h-5 text-slate-500" />
@@ -2620,6 +2775,104 @@ export function ConsumerAppMobile({
                   />
                 </div>
 
+                {/* Dining Preferences Section */}
+                <div className="pt-4 border-t border-slate-700">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Utensils className="w-5 h-5 text-cyan-400" />
+                    <h3 className="text-lg text-slate-100">Dining Preferences</h3>
+                  </div>
+                  
+                  {/* Favorite Cuisines */}
+                  <div className="mb-4">
+                    <Label className="text-slate-300 mb-2 block">Favorite Cuisines</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {['Italian', 'Japanese', 'Mexican', 'Chinese', 'Indian', 'Thai', 'French', 'American'].map(cuisine => (
+                        <Badge
+                          key={cuisine}
+                          className={`cursor-pointer ${
+                            diningPreferences.favoriteCuisines.includes(cuisine)
+                              ? 'bg-cyan-600 hover:bg-cyan-700 text-white'
+                              : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                          }`}
+                          onClick={() => {
+                            const updated = diningPreferences.favoriteCuisines.includes(cuisine)
+                              ? diningPreferences.favoriteCuisines.filter(c => c !== cuisine)
+                              : [...diningPreferences.favoriteCuisines, cuisine];
+                            setDiningPreferences({ ...diningPreferences, favoriteCuisines: updated });
+                          }}
+                        >
+                          {cuisine}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Dietary Restrictions */}
+                  <div className="mb-4">
+                    <Label className="text-slate-300 mb-2 block">Dietary Restrictions</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {['Vegetarian', 'Vegan', 'Gluten-Free', 'Dairy-Free', 'Nut-Free', 'Halal', 'Kosher'].map(restriction => (
+                        <Badge
+                          key={restriction}
+                          className={`cursor-pointer ${
+                            diningPreferences.dietaryRestrictions.includes(restriction)
+                              ? 'bg-amber-500 hover:bg-amber-600 text-slate-900'
+                              : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                          }`}
+                          onClick={() => {
+                            const updated = diningPreferences.dietaryRestrictions.includes(restriction)
+                              ? diningPreferences.dietaryRestrictions.filter(r => r !== restriction)
+                              : [...diningPreferences.dietaryRestrictions, restriction];
+                            setDiningPreferences({ ...diningPreferences, dietaryRestrictions: updated });
+                          }}
+                        >
+                          {restriction}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Spice Level */}
+                  <div className="mb-4">
+                    <Label className="text-slate-300 mb-2 block">Spice Level</Label>
+                    <Select
+                      value={diningPreferences.spiceLevel}
+                      onValueChange={(value) => setDiningPreferences({ ...diningPreferences, spiceLevel: value })}
+                    >
+                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-100 h-12">
+                        <SelectValue placeholder="Select spice level" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {['Mild', 'Medium', 'Hot', 'Extra Hot'].map(level => (
+                          <SelectItem key={level} value={level} className="text-slate-100 focus:bg-slate-700 focus:text-slate-100">
+                            {level}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Seating Preference */}
+                  <div>
+                    <Label className="text-slate-300 mb-2 block">Seating Preference</Label>
+                    <Select
+                      value={diningPreferences.seatingPreference}
+                      onValueChange={(value) => setDiningPreferences({ ...diningPreferences, seatingPreference: value })}
+                    >
+                      <SelectTrigger className="bg-slate-800 border-slate-700 text-slate-100 h-12">
+                        <SelectValue placeholder="Select seating preference" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {['Window', 'Booth', 'Bar', 'Outdoor', 'No Preference'].map(seating => (
+                          <SelectItem key={seating} value={seating} className="text-slate-100 focus:bg-slate-700 focus:text-slate-100">
+                            {seating}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
                 {isDemoMode && (
                   <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
                     <p className="text-sm text-blue-400">
@@ -2697,34 +2950,192 @@ export function ConsumerAppMobile({
               Manage your saved payment cards
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 mt-4">
-            {paymentMethods.map((card) => (
-              <Card key={card.id} className="p-4 bg-slate-700/50 border-slate-600">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <CreditCard className="w-8 h-8 text-blue-400" />
-                    <div>
-                      <div className="text-slate-100">{card.type} •••• {card.last4}</div>
-                      <div className="text-sm text-slate-400">Expires {card.expiry}</div>
-                      {card.isDefault && (
-                        <Badge className="mt-1 bg-blue-500/20 text-blue-400">Default</Badge>
-                      )}
+          <div className="space-y-4 mt-4 max-h-[60vh] overflow-y-auto">
+            {!isAddingCard ? (
+              <>
+                {paymentMethods.map((card) => (
+                  <Card key={card.id} className="p-4 bg-slate-700/50 border-slate-600">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <CreditCard className="w-8 h-8 text-blue-400" />
+                        <div>
+                          <div className="text-slate-100">{card.type} •••• {card.last4}</div>
+                          <div className="text-sm text-slate-400">Expires {card.expiry}</div>
+                          {card.isDefault && (
+                            <Badge className="mt-1 bg-blue-500/20 text-blue-400">Default</Badge>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRemovePaymentMethod(card.id)}
+                      >
+                        <Trash2 className="w-4 h-4 text-red-400" />
+                      </Button>
                     </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleRemovePaymentMethod(card.id)}
+                  </Card>
+                ))}
+                <Button 
+                  className="w-full bg-blue-600 hover:bg-blue-700"
+                  onClick={() => setIsAddingCard(true)}
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add New Card
+                </Button>
+              </>
+            ) : (
+              <div className="space-y-4">
+                {/* Card Type */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300">Card Type</Label>
+                  <Select
+                    value={newCard.type}
+                    onValueChange={(value) => setNewCard({ ...newCard, type: value as 'Visa' | 'Mastercard' | 'Amex' | 'Discover' })}
                   >
-                    <Trash2 className="w-4 h-4 text-red-400" />
+                    <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100 h-12">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-700">
+                      <SelectItem value="Visa" className="text-slate-100 focus:bg-slate-700">Visa</SelectItem>
+                      <SelectItem value="Mastercard" className="text-slate-100 focus:bg-slate-700">Mastercard</SelectItem>
+                      <SelectItem value="Amex" className="text-slate-100 focus:bg-slate-700">American Express</SelectItem>
+                      <SelectItem value="Discover" className="text-slate-100 focus:bg-slate-700">Discover</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Card Number */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300">Card Number</Label>
+                  <Input
+                    value={newCard.cardNumber}
+                    onChange={(e) => {
+                      // Format card number with spaces every 4 digits
+                      const value = e.target.value.replace(/\s/g, '').replace(/(\d{4})/g, '$1 ').trim();
+                      setNewCard({ ...newCard, cardNumber: value });
+                    }}
+                    className="bg-slate-700 border-slate-600 text-slate-100 h-12"
+                    placeholder="1234 5678 9012 3456"
+                    maxLength={19}
+                  />
+                </div>
+
+                {/* Cardholder Name */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300">Cardholder Name</Label>
+                  <Input
+                    value={newCard.cardName}
+                    onChange={(e) => setNewCard({ ...newCard, cardName: e.target.value })}
+                    className="bg-slate-700 border-slate-600 text-slate-100 h-12"
+                    placeholder="John Doe"
+                  />
+                </div>
+
+                {/* Expiry and CVV */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">Month</Label>
+                    <Select
+                      value={newCard.expiryMonth}
+                      onValueChange={(value) => setNewCard({ ...newCard, expiryMonth: value })}
+                    >
+                      <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100 h-12">
+                        <SelectValue placeholder="MM" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {Array.from({ length: 12 }, (_, i) => {
+                          const month = (i + 1).toString().padStart(2, '0');
+                          return (
+                            <SelectItem key={month} value={month} className="text-slate-100 focus:bg-slate-700">
+                              {month}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">Year</Label>
+                    <Select
+                      value={newCard.expiryYear}
+                      onValueChange={(value) => setNewCard({ ...newCard, expiryYear: value })}
+                    >
+                      <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100 h-12">
+                        <SelectValue placeholder="YYYY" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {Array.from({ length: 10 }, (_, i) => {
+                          const year = (new Date().getFullYear() + i).toString();
+                          return (
+                            <SelectItem key={year} value={year} className="text-slate-100 focus:bg-slate-700">
+                              {year}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">CVV</Label>
+                    <Input
+                      value={newCard.cvv}
+                      onChange={(e) => {
+                        const value = e.target.value.replace(/\D/g, '');
+                        setNewCard({ ...newCard, cvv: value });
+                      }}
+                      className="bg-slate-700 border-slate-600 text-slate-100 h-12"
+                      placeholder="123"
+                      maxLength={4}
+                      type="password"
+                    />
+                  </div>
+                </div>
+
+                {/* Set as Default */}
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="setDefaultMobile"
+                    checked={newCard.isDefault}
+                    onChange={(e) => setNewCard({ ...newCard, isDefault: e.target.checked })}
+                    className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500"
+                  />
+                  <Label htmlFor="setDefaultMobile" className="text-slate-300 cursor-pointer">
+                    Set as default payment method
+                  </Label>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex gap-3 pt-4">
+                  <Button
+                    className="flex-1 bg-blue-600 hover:bg-blue-700"
+                    onClick={handleAddPaymentMethod}
+                  >
+                    <Save className="w-4 h-4 mr-2" />
+                    Save Card
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="flex-1 border-slate-600 text-slate-300"
+                    onClick={() => {
+                      setIsAddingCard(false);
+                      setNewCard({
+                        cardNumber: '',
+                        cardName: '',
+                        expiryMonth: '',
+                        expiryYear: '',
+                        cvv: '',
+                        type: 'Visa',
+                        isDefault: false
+                      });
+                    }}
+                  >
+                    Cancel
                   </Button>
                 </div>
-              </Card>
-            ))}
-            <Button className="w-full bg-blue-600 hover:bg-blue-700">
-              <Plus className="w-4 h-4 mr-2" />
-              Add New Card
-            </Button>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -2741,8 +3152,21 @@ export function ConsumerAppMobile({
             <div className="space-y-2">
               <Label className="text-slate-300">Favorite Cuisines</Label>
               <div className="flex flex-wrap gap-2">
-                {diningPreferences.favoriteCuisines.map((cuisine) => (
-                  <Badge key={cuisine} className="bg-blue-500/20 text-blue-400">
+                {['Italian', 'Japanese', 'Mexican', 'Chinese', 'Indian', 'Thai', 'French', 'American'].map(cuisine => (
+                  <Badge
+                    key={cuisine}
+                    className={`cursor-pointer ${
+                      diningPreferences.favoriteCuisines.includes(cuisine)
+                        ? 'bg-cyan-600 hover:bg-cyan-700 text-white'
+                        : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                    }`}
+                    onClick={() => {
+                      const updated = diningPreferences.favoriteCuisines.includes(cuisine)
+                        ? diningPreferences.favoriteCuisines.filter(c => c !== cuisine)
+                        : [...diningPreferences.favoriteCuisines, cuisine];
+                      setDiningPreferences({ ...diningPreferences, favoriteCuisines: updated });
+                    }}
+                  >
                     {cuisine}
                   </Badge>
                 ))}
@@ -2751,8 +3175,21 @@ export function ConsumerAppMobile({
             <div className="space-y-2">
               <Label className="text-slate-300">Dietary Restrictions</Label>
               <div className="flex flex-wrap gap-2">
-                {diningPreferences.dietaryRestrictions.map((restriction) => (
-                  <Badge key={restriction} className="bg-amber-500/20 text-amber-400">
+                {['Vegetarian', 'Vegan', 'Gluten-Free', 'Dairy-Free', 'Nut-Free', 'Halal', 'Kosher'].map(restriction => (
+                  <Badge
+                    key={restriction}
+                    className={`cursor-pointer ${
+                      diningPreferences.dietaryRestrictions.includes(restriction)
+                        ? 'bg-amber-500 hover:bg-amber-600 text-slate-900'
+                        : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                    }`}
+                    onClick={() => {
+                      const updated = diningPreferences.dietaryRestrictions.includes(restriction)
+                        ? diningPreferences.dietaryRestrictions.filter(r => r !== restriction)
+                        : [...diningPreferences.dietaryRestrictions, restriction];
+                      setDiningPreferences({ ...diningPreferences, dietaryRestrictions: updated });
+                    }}
+                  >
                     {restriction}
                   </Badge>
                 ))}

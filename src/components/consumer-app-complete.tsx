@@ -720,6 +720,16 @@ export function ConsumerApp({
 
   // Settings dialog states
   const [openSettingsDialog, setOpenSettingsDialog] = useState<'personal' | 'payment' | 'dining' | 'notifications' | 'privacy' | null>(null);
+  const [isAddingCard, setIsAddingCard] = useState(false);
+  const [newCard, setNewCard] = useState({
+    cardNumber: '',
+    cardName: '',
+    expiryMonth: '',
+    expiryYear: '',
+    cvv: '',
+    type: 'Visa' as 'Visa' | 'Mastercard' | 'Amex' | 'Discover',
+    isDefault: false
+  });
 
   // Conversation states
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
@@ -918,6 +928,93 @@ export function ConsumerApp({
       }
     } else {
       toast.success('Card removed (demo mode)');
+    }
+  };
+
+  const handleAddPaymentMethod = async () => {
+    // Validate inputs
+    if (!newCard.cardNumber || !newCard.cardName || !newCard.expiryMonth || !newCard.expiryYear || !newCard.cvv) {
+      toast.error('Please fill in all card details');
+      return;
+    }
+
+    // Validate card number (basic check - should be 13-19 digits)
+    const cardNumberClean = newCard.cardNumber.replace(/\s/g, '');
+    if (!/^\d{13,19}$/.test(cardNumberClean)) {
+      toast.error('Invalid card number');
+      return;
+    }
+
+    // Validate CVV (3 or 4 digits)
+    if (!/^\d{3,4}$/.test(newCard.cvv)) {
+      toast.error('Invalid CVV');
+      return;
+    }
+
+    // Validate expiry
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+    const expYear = parseInt(newCard.expiryYear);
+    const expMonth = parseInt(newCard.expiryMonth);
+    
+    if (expYear < currentYear || (expYear === currentYear && expMonth < currentMonth)) {
+      toast.error('Card has expired');
+      return;
+    }
+
+    // Create new payment method
+    const newPaymentMethod = {
+      id: Date.now().toString(),
+      type: newCard.type,
+      last4: cardNumberClean.slice(-4),
+      expiry: `${newCard.expiryMonth}/${newCard.expiryYear.slice(-2)}`,
+      isDefault: newCard.isDefault || paymentMethods.length === 0
+    };
+
+    const updatedMethods = [...paymentMethods, newPaymentMethod];
+    
+    // If this card is set as default, unset other defaults
+    if (newPaymentMethod.isDefault) {
+      updatedMethods.forEach(method => {
+        if (method.id !== newPaymentMethod.id) {
+          method.isDefault = false;
+        }
+      });
+    }
+
+    setPaymentMethods(updatedMethods);
+    
+    if (!isDemoMode && currentUser) {
+      const success = await updatePaymentMethods(currentUser.uid, updatedMethods);
+      if (success) {
+        toast.success('Card added successfully');
+        setIsAddingCard(false);
+        setNewCard({
+          cardNumber: '',
+          cardName: '',
+          expiryMonth: '',
+          expiryYear: '',
+          cvv: '',
+          type: 'Visa',
+          isDefault: false
+        });
+      } else {
+        toast.error('Failed to add card');
+        // Revert on failure
+        setPaymentMethods(paymentMethods);
+      }
+    } else {
+      toast.success('Card added (demo mode)');
+      setIsAddingCard(false);
+      setNewCard({
+        cardNumber: '',
+        cardName: '',
+        expiryMonth: '',
+        expiryYear: '',
+        cvv: '',
+        type: 'Visa',
+        isDefault: false
+      });
     }
   };
 
@@ -1206,7 +1303,16 @@ export function ConsumerApp({
       const conversation = conversations.find(c => c.id === conversationId);
 
       if (conversation) {
-        setSelectedConversation(conversation);
+        // Enrich conversation with restaurant details from the reservation
+        const enrichedConversation = {
+          ...conversation,
+          restaurantName: reservation.restaurantName,
+          restaurantImage: reservation.restaurantImage,
+          reservationDate: reservation.date,
+          reservationTime: reservation.time
+        };
+        
+        setSelectedConversation(enrichedConversation);
         setIsChatPopupOpen(true); // Open chat popup with the conversation
         toast.success('Opening conversation with ' + reservation.restaurantName);
       } else {
@@ -1298,7 +1404,16 @@ export function ConsumerApp({
         displayName: profile.displayName,
         username: profile.username,
         phoneNumber: profile.phoneNumber,
+        diningPreferences: profile.diningPreferences,
+        notificationSettings: profile.notificationSettings,
       });
+      // Also update local dining preferences state
+      if (profile.diningPreferences) {
+        setDiningPreferences(profile.diningPreferences);
+      }
+      if (profile.notificationSettings) {
+        setNotificationSettings(profile.notificationSettings);
+      }
       setIsEditingProfile(true);
     }
   };
@@ -1345,6 +1460,10 @@ export function ConsumerApp({
             }
           }
         }
+
+        // Add dining preferences and notification settings to profile updates
+        profileUpdates.diningPreferences = diningPreferences;
+        profileUpdates.notificationSettings = notificationSettings;
 
         // Update profile in Firebase (even if photo upload failed)
         const success = await updateUserProfile(currentUser.uid, profileUpdates);
@@ -2435,7 +2554,7 @@ export function ConsumerApp({
               <>
                 {/* Profile Header */}
                 <Card className="p-6 bg-gradient-to-br from-slate-800/50 to-slate-900/50 border-slate-700">
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-start gap-4 mb-6">
                     <Avatar className="w-20 h-20">
                       {profile.photoURL && <AvatarImage src={profile.photoURL} />}
                       <AvatarFallback className="bg-cyan-600 text-white text-xl">
@@ -2445,7 +2564,7 @@ export function ConsumerApp({
                     <div className="flex-1">
                       <h3 className="text-xl text-slate-100 mb-1">{profile.displayName}</h3>
                       <p className="text-sm text-slate-400 mb-2">@{profile.username}</p>
-                      <p className="text-xs text-slate-500 mb-2">{profile.email}</p>
+                      <p className="text-xs text-slate-500 mb-1">{profile.email}</p>
                       {profile.phoneNumber && (
                         <p className="text-xs text-slate-500 mb-2">{profile.phoneNumber}</p>
                       )}
@@ -2463,6 +2582,60 @@ export function ConsumerApp({
                       <Edit className="w-4 h-4 mr-2" />
                       Edit Profile
                     </Button>
+                  </div>
+
+                  {/* Dining Preferences Section */}
+                  <div className="pt-4 border-t border-slate-700 space-y-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Utensils className="w-5 h-5 text-cyan-400" />
+                      <h4 className="text-base text-slate-100">Dining Preferences</h4>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Favorite Cuisines */}
+                      <div>
+                        <Label className="text-xs text-slate-400 mb-2 block">Favorite Cuisines</Label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {diningPreferences.favoriteCuisines.length > 0 ? (
+                            diningPreferences.favoriteCuisines.map(cuisine => (
+                              <Badge key={cuisine} className="bg-cyan-600/20 text-cyan-300 border-cyan-500/30 text-xs">
+                                {cuisine}
+                              </Badge>
+                            ))
+                          ) : (
+                            <span className="text-xs text-slate-500">Not set</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Dietary Restrictions */}
+                      <div>
+                        <Label className="text-xs text-slate-400 mb-2 block">Dietary Restrictions</Label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {diningPreferences.dietaryRestrictions.length > 0 ? (
+                            diningPreferences.dietaryRestrictions.map(restriction => (
+                              <Badge key={restriction} className="bg-amber-500/20 text-amber-300 border-amber-500/30 text-xs">
+                                {restriction}
+                              </Badge>
+                            ))
+                          ) : (
+                            <span className="text-xs text-slate-500">None</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Spice Level */}
+                      <div>
+                        <Label className="text-xs text-slate-400 mb-2 block">Spice Level</Label>
+                        <p className="text-sm text-slate-200">{diningPreferences.spiceLevel}</p>
+                      </div>
+
+                      {/* Seating Preference */}
+                      <div>
+                        <Label className="text-xs text-slate-400 mb-2 block">Seating Preference</Label>
+                        <p className="text-sm text-slate-200">{diningPreferences.seatingPreference}</p>
+                      </div>
+                    </div>
                   </div>
                 </Card>
               </>
@@ -2552,25 +2725,6 @@ export function ConsumerApp({
                     <div>
                       <div className="text-slate-100">Payment Methods</div>
                       <div className="text-sm text-slate-500">{paymentMethods.length} cards saved</div>
-                    </div>
-                  </div>
-                  <ChevronRight className="w-5 h-5 text-slate-500" />
-                </div>
-              </Card>
-
-              {/* Dining Preferences */}
-              <Card 
-                className="p-5 bg-slate-800/50 border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-all"
-                onClick={() => setOpenSettingsDialog('dining')}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center">
-                      <Utensils className="w-5 h-5 text-slate-400" />
-                    </div>
-                    <div>
-                      <div className="text-slate-100">Dining Preferences</div>
-                      <div className="text-sm text-slate-500">Cuisine, dietary restrictions</div>
                     </div>
                   </div>
                   <ChevronRight className="w-5 h-5 text-slate-500" />
@@ -3447,7 +3601,7 @@ export function ConsumerApp({
 
       {/* Edit Profile Dialog */}
       <Dialog open={isEditingProfile} onOpenChange={setIsEditingProfile}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-md">
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-2xl text-slate-100">Edit Profile</DialogTitle>
             <DialogDescription className="text-slate-400">
@@ -3543,6 +3697,101 @@ export function ConsumerApp({
                 />
               </div>
 
+              {/* Dining Preferences Section */}
+              <div className="pt-4 border-t border-slate-700">
+                <h3 className="text-lg text-slate-100 mb-4">Dining Preferences</h3>
+                
+                {/* Favorite Cuisines */}
+                <div className="space-y-2 mb-4">
+                  <Label className="text-slate-300">Favorite Cuisines</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {['Italian', 'Japanese', 'Mexican', 'Chinese', 'Indian', 'Thai', 'French', 'American'].map(cuisine => (
+                      <Badge
+                        key={cuisine}
+                        className={`cursor-pointer ${
+                          diningPreferences.favoriteCuisines.includes(cuisine)
+                            ? 'bg-cyan-600 hover:bg-cyan-700'
+                            : 'bg-slate-700 hover:bg-slate-600'
+                        }`}
+                        onClick={() => {
+                          const updated = diningPreferences.favoriteCuisines.includes(cuisine)
+                            ? diningPreferences.favoriteCuisines.filter(c => c !== cuisine)
+                            : [...diningPreferences.favoriteCuisines, cuisine];
+                          setDiningPreferences({ ...diningPreferences, favoriteCuisines: updated });
+                        }}
+                      >
+                        {cuisine}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Dietary Restrictions */}
+                <div className="space-y-2 mb-4">
+                  <Label className="text-slate-300">Dietary Restrictions</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {['Vegetarian', 'Vegan', 'Gluten-Free', 'Dairy-Free', 'Nut-Free', 'Halal', 'Kosher'].map(restriction => (
+                      <Badge
+                        key={restriction}
+                        className={`cursor-pointer ${
+                          diningPreferences.dietaryRestrictions.includes(restriction)
+                            ? 'bg-amber-500 hover:bg-amber-600 text-slate-900'
+                            : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                        }`}
+                        onClick={() => {
+                          const updated = diningPreferences.dietaryRestrictions.includes(restriction)
+                            ? diningPreferences.dietaryRestrictions.filter(r => r !== restriction)
+                            : [...diningPreferences.dietaryRestrictions, restriction];
+                          setDiningPreferences({ ...diningPreferences, dietaryRestrictions: updated });
+                        }}
+                      >
+                        {restriction}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Spice Level */}
+                <div className="space-y-2 mb-4">
+                  <Label className="text-slate-300">Spice Level</Label>
+                  <Select
+                    value={diningPreferences.spiceLevel}
+                    onValueChange={(value) => setDiningPreferences({ ...diningPreferences, spiceLevel: value })}
+                  >
+                    <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                      <SelectValue placeholder="Select spice level" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-700">
+                      {['Mild', 'Medium', 'Hot', 'Extra Hot'].map(level => (
+                        <SelectItem key={level} value={level} className="text-slate-100 focus:bg-slate-700 focus:text-slate-100">
+                          {level}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Seating Preference */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300">Seating Preference</Label>
+                  <Select
+                    value={diningPreferences.seatingPreference}
+                    onValueChange={(value) => setDiningPreferences({ ...diningPreferences, seatingPreference: value })}
+                  >
+                    <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                      <SelectValue placeholder="Select seating preference" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-700">
+                      {['Window', 'Booth', 'Bar', 'Outdoor', 'No Preference'].map(seating => (
+                        <SelectItem key={seating} value={seating} className="text-slate-100 focus:bg-slate-700 focus:text-slate-100">
+                          {seating}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
               {isDemoMode && (
                 <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
                   <p className="text-sm text-blue-400">
@@ -3634,33 +3883,191 @@ export function ConsumerApp({
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 mt-4">
-            {paymentMethods.map((card) => (
-              <Card key={card.id} className="p-4 bg-slate-700/50 border-slate-600">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <CreditCard className="w-8 h-8 text-cyan-400" />
-                    <div>
-                      <div className="text-slate-100">{card.type} •••• {card.last4}</div>
-                      <div className="text-sm text-slate-400">Expires {card.expiry}</div>
-                      {card.isDefault && (
-                        <Badge className="mt-1 bg-cyan-500/20 text-cyan-400 border-cyan-500/30">Default</Badge>
-                      )}
+            {!isAddingCard ? (
+              <>
+                {paymentMethods.map((card) => (
+                  <Card key={card.id} className="p-4 bg-slate-700/50 border-slate-600">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <CreditCard className="w-8 h-8 text-cyan-400" />
+                        <div>
+                          <div className="text-slate-100">{card.type} •••• {card.last4}</div>
+                          <div className="text-sm text-slate-400">Expires {card.expiry}</div>
+                          {card.isDefault && (
+                            <Badge className="mt-1 bg-cyan-500/20 text-cyan-400 border-cyan-500/30">Default</Badge>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRemovePaymentMethod(card.id)}
+                      >
+                        <Trash2 className="w-4 h-4 text-red-400" />
+                      </Button>
                     </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleRemovePaymentMethod(card.id)}
+                  </Card>
+                ))}
+                <Button 
+                  className="w-full bg-cyan-600 hover:bg-cyan-700"
+                  onClick={() => setIsAddingCard(true)}
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add New Card
+                </Button>
+              </>
+            ) : (
+              <div className="space-y-4">
+                {/* Card Type */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300">Card Type</Label>
+                  <Select
+                    value={newCard.type}
+                    onValueChange={(value) => setNewCard({ ...newCard, type: value as 'Visa' | 'Mastercard' | 'Amex' | 'Discover' })}
                   >
-                    <Trash2 className="w-4 h-4 text-red-400" />
+                    <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-700">
+                      <SelectItem value="Visa" className="text-slate-100 focus:bg-slate-700">Visa</SelectItem>
+                      <SelectItem value="Mastercard" className="text-slate-100 focus:bg-slate-700">Mastercard</SelectItem>
+                      <SelectItem value="Amex" className="text-slate-100 focus:bg-slate-700">American Express</SelectItem>
+                      <SelectItem value="Discover" className="text-slate-100 focus:bg-slate-700">Discover</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Card Number */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300">Card Number</Label>
+                  <Input
+                    value={newCard.cardNumber}
+                    onChange={(e) => {
+                      // Format card number with spaces every 4 digits
+                      const value = e.target.value.replace(/\s/g, '').replace(/(\d{4})/g, '$1 ').trim();
+                      setNewCard({ ...newCard, cardNumber: value });
+                    }}
+                    className="bg-slate-700 border-slate-600 text-slate-100"
+                    placeholder="1234 5678 9012 3456"
+                    maxLength={19}
+                  />
+                </div>
+
+                {/* Cardholder Name */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300">Cardholder Name</Label>
+                  <Input
+                    value={newCard.cardName}
+                    onChange={(e) => setNewCard({ ...newCard, cardName: e.target.value })}
+                    className="bg-slate-700 border-slate-600 text-slate-100"
+                    placeholder="John Doe"
+                  />
+                </div>
+
+                {/* Expiry and CVV */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">Month</Label>
+                    <Select
+                      value={newCard.expiryMonth}
+                      onValueChange={(value) => setNewCard({ ...newCard, expiryMonth: value })}
+                    >
+                      <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                        <SelectValue placeholder="MM" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {Array.from({ length: 12 }, (_, i) => {
+                          const month = (i + 1).toString().padStart(2, '0');
+                          return (
+                            <SelectItem key={month} value={month} className="text-slate-100 focus:bg-slate-700">
+                              {month}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">Year</Label>
+                    <Select
+                      value={newCard.expiryYear}
+                      onValueChange={(value) => setNewCard({ ...newCard, expiryYear: value })}
+                    >
+                      <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                        <SelectValue placeholder="YYYY" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {Array.from({ length: 10 }, (_, i) => {
+                          const year = (new Date().getFullYear() + i).toString();
+                          return (
+                            <SelectItem key={year} value={year} className="text-slate-100 focus:bg-slate-700">
+                              {year}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-slate-300">CVV</Label>
+                    <Input
+                      value={newCard.cvv}
+                      onChange={(e) => {
+                        const value = e.target.value.replace(/\D/g, '');
+                        setNewCard({ ...newCard, cvv: value });
+                      }}
+                      className="bg-slate-700 border-slate-600 text-slate-100"
+                      placeholder="123"
+                      maxLength={4}
+                      type="password"
+                    />
+                  </div>
+                </div>
+
+                {/* Set as Default */}
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="setDefault"
+                    checked={newCard.isDefault}
+                    onChange={(e) => setNewCard({ ...newCard, isDefault: e.target.checked })}
+                    className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-cyan-600 focus:ring-cyan-500"
+                  />
+                  <Label htmlFor="setDefault" className="text-slate-300 cursor-pointer">
+                    Set as default payment method
+                  </Label>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex gap-3 pt-4">
+                  <Button
+                    className="flex-1 bg-cyan-600 hover:bg-cyan-700"
+                    onClick={handleAddPaymentMethod}
+                  >
+                    <Save className="w-4 h-4 mr-2" />
+                    Save Card
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="flex-1 border-slate-600 text-slate-300"
+                    onClick={() => {
+                      setIsAddingCard(false);
+                      setNewCard({
+                        cardNumber: '',
+                        cardName: '',
+                        expiryMonth: '',
+                        expiryYear: '',
+                        cvv: '',
+                        type: 'Visa',
+                        isDefault: false
+                      });
+                    }}
+                  >
+                    Cancel
                   </Button>
                 </div>
-              </Card>
-            ))}
-            <Button className="w-full bg-cyan-600 hover:bg-cyan-700">
-              <Plus className="w-4 h-4 mr-2" />
-              Add New Card
-            </Button>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
