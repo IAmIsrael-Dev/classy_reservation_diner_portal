@@ -595,6 +595,8 @@ export function ConsumerAppMobile({
   };
 
   const handleAddPaymentMethod = async () => {
+    console.log('handleAddPaymentMethod called', newCard);
+    
     // Validate inputs
     if (!newCard.cardNumber || !newCard.cardName || !newCard.expiryMonth || !newCard.expiryYear || !newCard.cvv) {
       toast.error('Please fill in all card details');
@@ -3011,13 +3013,17 @@ export function ConsumerAppMobile({
                   <Input
                     value={newCard.cardNumber}
                     onChange={(e) => {
-                      // Format card number with spaces every 4 digits
-                      const value = e.target.value.replace(/\s/g, '').replace(/(\d{4})/g, '$1 ').trim();
+                      // Only allow digits and spaces
+                      let value = e.target.value.replace(/[^\d]/g, '');
+                      // Format with spaces every 4 digits
+                      if (value.length > 0) {
+                        value = value.match(/.{1,4}/g)?.join(' ') || value;
+                      }
                       setNewCard({ ...newCard, cardNumber: value });
                     }}
                     className="bg-slate-700 border-slate-600 text-slate-100 h-12"
                     placeholder="1234 5678 9012 3456"
-                    maxLength={19}
+                    maxLength={23}
                   />
                 </div>
 
